@@ -10,6 +10,7 @@ from .nn import (
     Linear,
     ResidualRMSNorm,
     RMSNorm,
+    Softmax,
     SwiGLU,
 )
 from .optim import SGD, AdamW
@@ -31,6 +32,7 @@ __all__ = [
     "Linear",
     "ResidualRMSNorm",
     "RMSNorm",
+    "Softmax",
     "SGD",
     "SwiGLU",
     "clip_grad_norm",

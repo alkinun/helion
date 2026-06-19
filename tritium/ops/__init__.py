@@ -16,6 +16,7 @@ from .relu import relu
 from .rmsnorm import residual_rmsnorm, rmsnorm, rmsnorm_backward
 from .rope import rope, rope_
 from .sgd import sgd_step
+from .softmax import softmax, softmax_backward
 from .swiglu import swiglu, swiglu_backward
 
 __all__ = [
@@ -42,6 +43,8 @@ __all__ = [
     "rope",
     "rope_",
     "sgd_step",
+    "softmax",
+    "softmax_backward",
     "swiglu",
     "swiglu_backward",
 ]

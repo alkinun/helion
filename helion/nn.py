@@ -100,6 +100,11 @@ class LayerNorm(nn.Module):
         return tritium.layernorm(x, self.weight, self.bias, self.eps)
 
 
+class Softmax(nn.Module):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return tritium.softmax(x)
+
+
 class SwiGLU(nn.Module):
     def forward(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
         return tritium.swiglu(gate, up)

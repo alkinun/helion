@@ -61,6 +61,24 @@ def test_layernorm_autograd() -> None:
 
 
 @cuda_required
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_softmax_forward(dtype: torch.dtype) -> None:
+    layer = helion.Softmax().to(device="cuda", dtype=dtype)
+    x = torch.randn(8, 64, device="cuda", dtype=dtype)
+    ref = torch.softmax(x.float(), dim=-1).to(dtype)
+    torch.testing.assert_close(layer(x), ref, rtol=2e-2, atol=2e-2)
+
+
+@cuda_required
+def test_softmax_autograd() -> None:
+    layer = helion.Softmax().to(device="cuda", dtype=torch.float32)
+    x = torch.randn(8, 64, device="cuda", requires_grad=True)
+    layer(x).sum().backward()
+    assert x.grad is not None
+    assert x.grad.shape == x.shape
+
+
+@cuda_required
 def test_swiglu_forward() -> None:
     act = helion.SwiGLU()
     x = torch.randn(8, 32, device="cuda", dtype=torch.float32)

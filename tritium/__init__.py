@@ -25,6 +25,8 @@ from .ops import (
     rope,
     rope_,
     sgd_step,
+    softmax,
+    softmax_backward,
     swiglu,
     swiglu_backward,
 )
@@ -59,6 +61,8 @@ __all__ = [
     "rmsnorm",
     "rmsnorm_backward",
     "sgd_step",
+    "softmax",
+    "softmax_backward",
     "swiglu",
     "swiglu_backward",
 ]
