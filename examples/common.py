@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 import urllib.request
 
@@ -172,6 +173,75 @@ def text_batch(
     x = torch.stack([data[i : i + seq_len] for i in ix])
     y = torch.stack([data[i + 1 : i + seq_len + 1] for i in ix])
     return x.to(device), y.to(device)
+
+
+def split_lm_data(
+    data: torch.Tensor,
+    val_fraction: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if not 0.0 < val_fraction < 1.0:
+        raise ValueError("val_fraction must satisfy 0 < val_fraction < 1")
+    split = int(len(data) * (1.0 - val_fraction))
+    return data[:split], data[split:]
+
+
+def iter_sequential_lm_batches(
+    data: torch.Tensor,
+    *,
+    batch_size: int,
+    seq_len: int,
+    device: torch.device,
+    max_batches: int = 0,
+):
+    starts = torch.arange(0, len(data) - seq_len - 1, seq_len)
+    if max_batches > 0:
+        starts = starts[: batch_size * max_batches]
+
+    for offset in range(0, len(starts), batch_size):
+        batch_starts = starts[offset : offset + batch_size]
+        if len(batch_starts) == 0:
+            break
+        x = torch.stack([data[i : i + seq_len] for i in batch_starts])
+        y = torch.stack([data[i + 1 : i + seq_len + 1] for i in batch_starts])
+        yield x.to(device), y.to(device)
+
+
+def evaluate_lm_loss(
+    model: nn.Module,
+    data: torch.Tensor,
+    *,
+    batch_size: int,
+    seq_len: int,
+    device: torch.device,
+    max_batches: int = 0,
+) -> tuple[float, float, int, int]:
+    was_training = model.training
+    model.eval()
+
+    total_loss = 0.0
+    total_tokens = 0
+    total_batches = 0
+    with torch.inference_mode():
+        for x, y in iter_sequential_lm_batches(
+            data,
+            batch_size=batch_size,
+            seq_len=seq_len,
+            device=device,
+            max_batches=max_batches,
+        ):
+            loss = model(x, y)
+            tokens = y.numel()
+            total_loss += loss.item() * tokens
+            total_tokens += tokens
+            total_batches += 1
+
+    if was_training:
+        model.train()
+    if total_tokens == 0:
+        raise ValueError("no evaluation batches were produced")
+
+    mean_loss = total_loss / total_tokens
+    return mean_loss, math.exp(mean_loss), total_tokens, total_batches
 
 
 @torch.no_grad()

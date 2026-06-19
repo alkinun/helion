@@ -29,6 +29,11 @@ python examples/evaluate_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt
 python examples/generate_from_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt --prompt "ROMEO:\n"
 ```
 
+`train_shakespeare.py` trains on the first `1 - --val-fraction` portion of the
+dataset and validates on the held-out tail. It logs validation loss/perplexity
+every `--eval-interval` steps and on the final step. Add
+`--best-checkpoint-out best.pt` to save the best validation checkpoint.
+
 ## Measurement
 
 - `train_compare.py`: full training-step timing for Helion vs PyTorch eager
