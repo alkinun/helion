@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError, version
 
 from .amp import GradScaler, autocast
 from .checkpoint import checkpoint
+from .ema import EMA
 from .nn import (
     Attention,
     Dropout,
@@ -31,6 +32,7 @@ __all__ = [
     "Checkpoint",
     "CosineLR",
     "Dropout",
+    "EMA",
     "Embedding",
     "GradScaler",
     "LayerNorm",
