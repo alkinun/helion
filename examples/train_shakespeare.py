@@ -54,6 +54,11 @@ def main() -> None:
     )
     parser.add_argument("--gen-interval", type=int, default=200)
     parser.add_argument("--gen-len", type=int, default=200)
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint-out", type=str, default="")
     parser.add_argument("--best-checkpoint-out", type=str, default="")
     args = parser.parse_args()
@@ -155,12 +160,34 @@ def main() -> None:
             and step % args.gen_interval == 0
         )
         if should_sample:
-            sample = generate_cached(model, tokenizer, "ROMEO:\n", args.gen_len, 0.7)
+            sample = generate_cached(
+                model,
+                tokenizer,
+                "ROMEO:\n",
+                args.gen_len,
+                temperature=args.temperature,
+                top_k=args.top_k,
+                top_p=args.top_p,
+                repetition_penalty=args.repetition_penalty,
+                seed=args.seed + step,
+            )
             print(f"\n--- sample at step {step} ---\n{sample}\n")
 
     if args.gen_len > 0:
         print("\n=== final sample ===")
-        print(generate_cached(model, tokenizer, "ROMEO:\n", args.gen_len, 0.7))
+        print(
+            generate_cached(
+                model,
+                tokenizer,
+                "ROMEO:\n",
+                args.gen_len,
+                temperature=args.temperature,
+                top_k=args.top_k,
+                top_p=args.top_p,
+                repetition_penalty=args.repetition_penalty,
+                seed=args.seed + args.steps,
+            )
+        )
 
     if args.checkpoint_out:
         helion.save_checkpoint(

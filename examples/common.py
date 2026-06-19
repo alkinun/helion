@@ -244,6 +244,68 @@ def evaluate_lm_loss(
     return mean_loss, math.exp(mean_loss), total_tokens, total_batches
 
 
+def _apply_repetition_penalty(
+    logits: torch.Tensor,
+    token_ids: list[int],
+    penalty: float,
+) -> torch.Tensor:
+    if penalty == 1.0 or not token_ids:
+        return logits
+    unique_ids = torch.tensor(sorted(set(token_ids)), device=logits.device)
+    penalized = logits.clone()
+    selected = penalized[unique_ids]
+    penalized[unique_ids] = torch.where(
+        selected < 0,
+        selected * penalty,
+        selected / penalty,
+    )
+    return penalized
+
+
+def sample_next_token(
+    logits: torch.Tensor,
+    *,
+    temperature: float,
+    top_k: int,
+    top_p: float,
+    repetition_penalty: float,
+    seen_token_ids: list[int],
+    generator: torch.Generator | None,
+) -> int:
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
+    if top_k < 0:
+        raise ValueError("top_k must be >= 0")
+    if not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must satisfy 0 < top_p <= 1")
+    if repetition_penalty <= 0:
+        raise ValueError("repetition_penalty must be > 0")
+
+    logits = logits.float().reshape(-1)
+    logits = _apply_repetition_penalty(logits, seen_token_ids, repetition_penalty)
+    logits = logits / temperature
+
+    if top_k > 0 and top_k < logits.numel():
+        threshold = torch.topk(logits, top_k).values[-1]
+        logits = logits.masked_fill(logits < threshold, -float("inf"))
+
+    if top_p < 1.0:
+        sorted_logits, sorted_indices = torch.sort(logits, descending=True)
+        sorted_probs = torch.softmax(sorted_logits, dim=-1)
+        cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+        remove = cumulative_probs > top_p
+        remove[1:] = remove[:-1].clone()
+        remove[0] = False
+        logits = logits.scatter(
+            0,
+            sorted_indices[remove],
+            torch.full_like(sorted_logits[remove], -float("inf")),
+        )
+
+    probs = torch.softmax(logits, dim=-1)
+    return torch.multinomial(probs, num_samples=1, generator=generator).item()
+
+
 @torch.no_grad()
 def generate_cached(
     model: TinyLanguageModel,
@@ -251,15 +313,34 @@ def generate_cached(
     prompt: str,
     max_new_tokens: int,
     temperature: float = 0.8,
+    top_k: int = 0,
+    top_p: float = 1.0,
+    repetition_penalty: float = 1.0,
+    seed: int | None = None,
 ) -> str:
     if not prompt:
         raise ValueError("prompt must not be empty.")
+
+    if max_new_tokens < 0:
+        raise ValueError("max_new_tokens must be >= 0")
+    if temperature <= 0:
+        raise ValueError("temperature must be > 0")
+    if top_k < 0:
+        raise ValueError("top_k must be >= 0")
+    if not 0.0 < top_p <= 1.0:
+        raise ValueError("top_p must satisfy 0 < top_p <= 1")
+    if repetition_penalty <= 0:
+        raise ValueError("repetition_penalty must be > 0")
 
     was_training = model.training
     model.eval()
 
     device = next(model.parameters()).device
     dtype = next(model.parameters()).dtype
+    generator = None
+    if seed is not None:
+        generator = torch.Generator(device=device)
+        generator.manual_seed(seed)
     max_len = model.cfg.max_seq_len
     ids = tokenizer.encode(prompt)[-max_len:]
     prompt = tokenizer.decode(ids)
@@ -298,8 +379,15 @@ def generate_cached(
 
         if pos >= len(ids) - 1:
             logits = tritium.matmul(hidden.reshape(1, -1), model.lm_head.T.contiguous())
-            probs = torch.softmax(logits.reshape(-1) / temperature, dim=-1)
-            next_id = torch.multinomial(probs, num_samples=1).item()
+            next_id = sample_next_token(
+                logits,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                repetition_penalty=repetition_penalty,
+                seen_token_ids=[*ids, *generated],
+                generator=generator,
+            )
             generated.append(next_id)
 
     if was_training:

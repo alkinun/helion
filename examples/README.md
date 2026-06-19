@@ -26,13 +26,18 @@ Example train/save/test workflow:
 ```bash
 python examples/train_shakespeare.py --steps 1000 --checkpoint-out /tmp/helion_shakespeare.pt
 python examples/evaluate_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt
-python examples/generate_from_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt --prompt "ROMEO:\n"
+python examples/generate_from_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt \
+  --prompt "ROMEO:\n" --top-k 20 --top-p 0.9 --seed 123
 ```
 
 `train_shakespeare.py` trains on the first `1 - --val-fraction` portion of the
 dataset and validates on the held-out tail. It logs validation loss/perplexity
 every `--eval-interval` steps and on the final step. Add
 `--best-checkpoint-out best.pt` to save the best validation checkpoint.
+
+Generation supports `--temperature`, `--top-k`, `--top-p`, `--seed`, and
+`--repetition-penalty` in `train_shakespeare.py`, `inference_cached.py`, and
+`generate_from_checkpoint.py`.
 
 ## Measurement
 

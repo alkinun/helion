@@ -36,6 +36,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--steps", type=int, default=100)
     parser.add_argument("--gen-len", type=int, default=120)
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--top-k", type=int, default=0)
+    parser.add_argument("--top-p", type=float, default=1.0)
+    parser.add_argument("--repetition-penalty", type=float, default=1.0)
+    parser.add_argument("--seed", type=int, default=7)
     args = parser.parse_args()
 
     device = require_cuda()
@@ -67,7 +72,19 @@ def main() -> None:
             print(f"step {step:3d} loss={loss.item():.4f}")
 
     print("\n=== cached generation ===")
-    print(generate_cached(model, tokenizer, "HELION:\n", args.gen_len, temperature=0.7))
+    print(
+        generate_cached(
+            model,
+            tokenizer,
+            "HELION:\n",
+            args.gen_len,
+            temperature=args.temperature,
+            top_k=args.top_k,
+            top_p=args.top_p,
+            repetition_penalty=args.repetition_penalty,
+            seed=args.seed,
+        )
+    )
 
 
 if __name__ == "__main__":
