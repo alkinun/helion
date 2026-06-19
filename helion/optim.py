@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from typing import Any
 
 import torch
 import torch.nn as nn
@@ -15,6 +16,12 @@ class _Optimizer:
     def zero_grad(self) -> None:
         for p in self.params:
             p.grad = None
+
+    def state_dict(self) -> dict[str, Any]:
+        raise NotImplementedError
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        raise NotImplementedError
 
 
 class AdamW(_Optimizer):
@@ -62,6 +69,42 @@ class AdamW(_Optimizer):
                 step=self._step,
             )
 
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "step": self._step,
+            "lr": self.lr,
+            "beta1": self.beta1,
+            "beta2": self.beta2,
+            "eps": self.eps,
+            "weight_decay": self.weight_decay,
+            "state": [
+                {"exp_avg": m, "exp_avg_sq": v}
+                for m, v in (self.state[p] for p in self.params)
+            ],
+        }
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        self._step = state_dict["step"]
+        self.lr = state_dict["lr"]
+        self.beta1 = state_dict["beta1"]
+        self.beta2 = state_dict["beta2"]
+        self.eps = state_dict["eps"]
+        self.weight_decay = state_dict["weight_decay"]
+
+        saved = state_dict["state"]
+        if len(saved) != len(self.params):
+            raise ValueError(
+                f"Optimizer state has {len(saved)} param entries but the "
+                f"optimizer has {len(self.params)} params."
+            )
+        self.state = {
+            p: (
+                entry["exp_avg"].to(device=p.device),
+                entry["exp_avg_sq"].to(device=p.device),
+            )
+            for p, entry in zip(self.params, saved, strict=True)
+        }
+
 
 class SGD(_Optimizer):
     def __init__(
@@ -84,3 +127,10 @@ class SGD(_Optimizer):
                 p.data = p.data.contiguous()
             grad = grad.contiguous()
             tritium.sgd_step(p.data, grad, self.lr, weight_decay=self.weight_decay)
+
+    def state_dict(self) -> dict[str, Any]:
+        return {"lr": self.lr, "weight_decay": self.weight_decay}
+
+    def load_state_dict(self, state_dict: dict[str, Any]) -> None:
+        self.lr = state_dict["lr"]
+        self.weight_decay = state_dict["weight_decay"]

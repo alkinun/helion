@@ -16,6 +16,7 @@ from .nn import (
     SwiGLU,
 )
 from .optim import SGD, AdamW
+from .state import Checkpoint, load_checkpoint, save_checkpoint
 from .training import CosineLR, clip_grad_norm
 
 try:
@@ -27,6 +28,7 @@ __all__ = [
     "__version__",
     "AdamW",
     "Attention",
+    "Checkpoint",
     "CosineLR",
     "Dropout",
     "Embedding",
@@ -41,4 +43,6 @@ __all__ = [
     "autocast",
     "checkpoint",
     "clip_grad_norm",
+    "load_checkpoint",
+    "save_checkpoint",
 ]
