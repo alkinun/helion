@@ -18,11 +18,14 @@ Most examples require CUDA because Tritium launches Triton kernels.
 - `train_shakespeare.py`: practical tiny-shakespeare training and sampling.
 - `generate_from_checkpoint.py`: load a `train_shakespeare.py` checkpoint and
   generate from a prompt.
+- `evaluate_checkpoint.py`: load a `train_shakespeare.py` checkpoint and report
+  held-out validation loss/perplexity.
 
 Example train/save/test workflow:
 
 ```bash
 python examples/train_shakespeare.py --steps 1000 --checkpoint-out /tmp/helion_shakespeare.pt
+python examples/evaluate_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt
 python examples/generate_from_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt --prompt "ROMEO:\n"
 ```
 

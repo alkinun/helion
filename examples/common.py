@@ -41,6 +41,15 @@ class CharTokenizer:
         return "".join(self.itos[i] for i in ids)
 
 
+def tokenizer_from_vocab(chars: list[str]) -> CharTokenizer:
+    tokenizer = CharTokenizer("".join(chars))
+    tokenizer.chars = chars
+    tokenizer.stoi = {ch: i for i, ch in enumerate(chars)}
+    tokenizer.itos = {i: ch for i, ch in enumerate(chars)}
+    tokenizer.vocab_size = len(chars)
+    return tokenizer
+
+
 class TransformerBlock(nn.Module):
     def __init__(self, cfg: TransformerConfig) -> None:
         super().__init__()

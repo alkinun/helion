@@ -14,18 +14,14 @@ from __future__ import annotations
 import argparse
 
 import torch
-from common import CharTokenizer, TinyLanguageModel, generate_cached, require_cuda
+from common import (
+    TinyLanguageModel,
+    generate_cached,
+    require_cuda,
+    tokenizer_from_vocab,
+)
 
 import helion
-
-
-def tokenizer_from_vocab(chars: list[str]) -> CharTokenizer:
-    tokenizer = CharTokenizer("".join(chars))
-    tokenizer.chars = chars
-    tokenizer.stoi = {ch: i for i, ch in enumerate(chars)}
-    tokenizer.itos = {i: ch for i, ch in enumerate(chars)}
-    tokenizer.vocab_size = len(chars)
-    return tokenizer
 
 
 def main() -> None:
