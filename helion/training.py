@@ -5,6 +5,8 @@ import math
 import torch
 import torch.nn as nn
 
+from .optim import _Optimizer
+
 
 def clip_grad_norm(
     params: list[nn.Parameter],
@@ -20,6 +22,67 @@ def clip_grad_norm(
         for g in grads:
             g.mul_(clip_coef)
     return total_norm
+
+
+class GradientAccumulator:
+    """Accumulate gradients over several micro-batches to fake a larger batch.
+
+    Divides each micro-batch loss by ``num_micro_batches`` so the summed
+    gradient equals the mean over the micro-batches -- the same gradient a
+    single full-batch step would produce (when each micro-batch loss is itself
+    reduced by mean).  The accumulator scales, counts, and zeros; the caller
+    owns the optimizer step so it composes with :func:`clip_grad_norm` and
+    :class:`~helion.amp.GradScaler`.
+
+        accum = helion.GradientAccumulator(opt, num_micro_batches=4)
+        opt.zero_grad()
+        for batch in loader:
+            accum.backward(loss_fn(batch))        # loss * 1/4, accumulated
+            if accum.ready:                       # every 4th micro-batch
+                helion.clip_grad_norm(params, 1.0)
+                opt.step()
+                accum.reset()
+
+    With mixed precision, feed the already-scaled loss and let the scaler own
+    the step::
+
+        accum.backward(scaler.scale(loss_fn(batch)))
+        if accum.ready:
+            helion.clip_grad_norm(params, 1.0)
+            scaler.step(opt)
+            scaler.update()
+            accum.reset()
+    """
+
+    def __init__(self, optimizer: _Optimizer, num_micro_batches: int) -> None:
+        if num_micro_batches < 1:
+            raise ValueError(
+                f"num_micro_batches must be >= 1, got {num_micro_batches}."
+            )
+        self.optimizer = optimizer
+        self.num_micro_batches = num_micro_batches
+        self.scale = 1.0 / num_micro_batches
+        self.count = 0
+
+    def backward(self, loss: torch.Tensor) -> None:
+        """Scale ``loss`` by ``1 / num_micro_batches`` and accumulate grads."""
+        (loss * self.scale).backward()
+        self.count += 1
+
+    @property
+    def ready(self) -> bool:
+        """True once ``num_micro_batches`` micro-batches have been accumulated."""
+        return self.count >= self.num_micro_batches
+
+    def step(self) -> None:
+        """Run ``optimizer.step()`` then :meth:`reset` (zero grads + counter)."""
+        self.optimizer.step()
+        self.reset()
+
+    def reset(self) -> None:
+        """Zero gradients and reset the micro-batch counter (no optimizer step)."""
+        self.optimizer.zero_grad()
+        self.count = 0
 
 
 class CosineLR:
