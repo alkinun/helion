@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
+from .checkpoint import checkpoint
 from .nn import (
     Attention,
     Dropout,
@@ -32,8 +33,9 @@ __all__ = [
     "Linear",
     "ResidualRMSNorm",
     "RMSNorm",
-    "Softmax",
     "SGD",
+    "Softmax",
     "SwiGLU",
+    "checkpoint",
     "clip_grad_norm",
 ]
