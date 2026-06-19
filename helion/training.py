@@ -133,3 +133,45 @@ class LinearLR:
         )
         progress = min(max(progress, 0.0), 1.0)
         return self.base_lr * (1.0 - progress)
+
+
+class AverageMeter:
+    """Track a running (weighted) mean of scalar values.
+
+    Handy for logging loss and metrics across a training epoch::
+
+        meter = helion.AverageMeter()
+        for batch in loader:
+            loss = ...
+            meter.update(loss.item(), n=batch_size)
+        print(f"epoch loss: {meter.avg:.4f}")
+
+    ``val`` holds the most recent sample, ``sum``/``count`` the weighted totals,
+    and :attr:`avg` the running mean (``0.0`` before any update).
+    """
+
+    val: float
+    sum: float
+    count: int
+
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        """Clear all statistics back to their empty defaults."""
+        self.val = 0.0
+        self.sum = 0.0
+        self.count = 0
+
+    def update(self, val: float | torch.Tensor, n: int = 1) -> None:
+        """Record ``val`` weighted by ``n`` items (defaults to a single sample)."""
+        self.val = float(val)
+        self.sum += self.val * n
+        self.count += n
+
+    @property
+    def avg(self) -> float:
+        return self.sum / self.count if self.count else 0.0
+
+    def __repr__(self) -> str:
+        return f"AverageMeter(val={self.val:.4g}, avg={self.avg:.4g}, n={self.count})"

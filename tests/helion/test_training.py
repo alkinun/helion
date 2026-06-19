@@ -120,6 +120,74 @@ def test_linear_lr_warmup_matches_cosine_warmup() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# AverageMeter
+# --------------------------------------------------------------------------- #
+
+
+def test_average_meter_initial_state() -> None:
+    meter = helion.AverageMeter()
+    assert meter.val == 0.0
+    assert meter.sum == 0.0
+    assert meter.count == 0
+    assert meter.avg == 0.0
+
+
+def test_average_meter_single_update() -> None:
+    meter = helion.AverageMeter()
+    meter.update(2.0)
+    assert meter.val == 2.0
+    assert meter.avg == 2.0
+    assert meter.sum == 2.0
+    assert meter.count == 1
+
+
+def test_average_meter_weighted_mean() -> None:
+    meter = helion.AverageMeter()
+    meter.update(4.0, n=2)
+    meter.update(10.0, n=3)
+    assert meter.avg == 7.6  # (4*2 + 10*3) / 5
+    assert meter.sum == 38.0
+    assert meter.count == 5
+
+
+def test_average_meter_val_is_last_update() -> None:
+    meter = helion.AverageMeter()
+    meter.update(1.0)
+    meter.update(2.0)
+    meter.update(3.0)
+    assert meter.val == 3.0
+
+
+def test_average_meter_reset() -> None:
+    meter = helion.AverageMeter()
+    meter.update(1.0, n=5)
+    meter.reset()
+    assert meter.val == 0.0
+    assert meter.sum == 0.0
+    assert meter.count == 0
+    assert meter.avg == 0.0
+
+
+def test_average_meter_accepts_scalar_tensor() -> None:
+    meter = helion.AverageMeter()
+    meter.update(torch.tensor(2.5))
+    assert meter.val == 2.5
+    assert meter.avg == 2.5
+
+
+def test_average_meter_empty_avg_avoids_division_by_zero() -> None:
+    assert helion.AverageMeter().avg == 0.0
+
+
+def test_average_meter_repr_runs() -> None:
+    meter = helion.AverageMeter()
+    meter.update(1.5, n=10)
+    text = repr(meter)
+    assert "AverageMeter" in text
+    assert "n=10" in text
+
+
+# --------------------------------------------------------------------------- #
 # GradientAccumulator
 # --------------------------------------------------------------------------- #
 
