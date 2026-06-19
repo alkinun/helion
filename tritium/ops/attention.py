@@ -17,6 +17,9 @@ from ._utils import (
 SUPPORTED_DTYPES = FLOAT_DTYPES
 
 ATTENTION_CONFIGS = [
+    triton.Config({"BLOCK_Q": 16, "BLOCK_KV": 64}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_Q": 16, "BLOCK_KV": 128}, num_warps=4, num_stages=2),
+    triton.Config({"BLOCK_Q": 16, "BLOCK_KV": 256}, num_warps=8, num_stages=2),
     triton.Config({"BLOCK_Q": 64, "BLOCK_KV": 64}, num_warps=4, num_stages=2),
     triton.Config({"BLOCK_Q": 128, "BLOCK_KV": 64}, num_warps=4, num_stages=2),
     triton.Config({"BLOCK_Q": 64, "BLOCK_KV": 128}, num_warps=8, num_stages=2),
@@ -25,7 +28,10 @@ ATTENTION_CONFIGS = [
 ]
 
 
-@triton.autotune(configs=ATTENTION_CONFIGS, key=["HEAD_DIM"])
+@triton.autotune(
+    configs=ATTENTION_CONFIGS,
+    key=["q_seq_len", "kv_seq_len", "HEAD_DIM", "IS_CAUSAL"],
+)
 @triton.jit
 def _attention_forward_kernel(
     q_ptr,

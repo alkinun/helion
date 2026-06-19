@@ -154,8 +154,11 @@ class Attention(nn.Module):
         k_flat = k.reshape(b * s, nkv, hd).contiguous()
         pos = torch.arange(s, device=x.device).repeat(b)
         rope_args = (self.rope_cos[:s], self.rope_sin[:s])
-        q_rot, _ = tritium.rope(q_flat, q_flat, *rope_args, position_ids=pos)
-        k_rot, _ = tritium.rope(k_flat, k_flat, *rope_args, position_ids=pos)
+        if nh == nkv:
+            q_rot, k_rot = tritium.rope(q_flat, k_flat, *rope_args, position_ids=pos)
+        else:
+            q_rot, _ = tritium.rope(q_flat, q_flat, *rope_args, position_ids=pos)
+            k_rot, _ = tritium.rope(k_flat, k_flat, *rope_args, position_ids=pos)
 
         def to_heads(t: torch.Tensor, n: int) -> torch.Tensor:
             return t.view(b, s, n, hd).transpose(1, 2)
@@ -185,15 +188,15 @@ class Attention(nn.Module):
 
         pos_ids = torch.full((b,), pos, device=x.device, dtype=torch.int32)
         rope_args = (self.rope_cos[: pos + 1], self.rope_sin[: pos + 1])
-        q_rot, _ = tritium.rope(
-            q.reshape(b, nh, hd), q.reshape(b, nh, hd), *rope_args, position_ids=pos_ids
-        )
-        k_rot, _ = tritium.rope(
-            k_new.reshape(b, nkv, hd),
-            k_new.reshape(b, nkv, hd),
-            *rope_args,
-            position_ids=pos_ids,
-        )
+        q_rope = q.reshape(b, nh, hd)
+        k_rope = k_new.reshape(b, nkv, hd)
+        if nh == nkv:
+            q_rot, k_rot = tritium.rope(
+                q_rope, k_rope, *rope_args, position_ids=pos_ids
+            )
+        else:
+            q_rot, _ = tritium.rope(q_rope, q_rope, *rope_args, position_ids=pos_ids)
+            k_rot, _ = tritium.rope(k_rope, k_rope, *rope_args, position_ids=pos_ids)
 
         k_cache[:, :, pos] = k_rot
         v_cache[:, :, pos] = v_new.view(b, nkv, hd)

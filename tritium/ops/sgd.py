@@ -23,6 +23,7 @@ def _sgd_step_kernel(
     param_ptr,
     grad_ptr,
     lr,
+    weight_decay,
     n_elements,
     BLOCK_SIZE: tl.constexpr,
 ):
@@ -31,7 +32,7 @@ def _sgd_step_kernel(
     mask = offsets < n_elements
     p = tl.load(param_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
     g = tl.load(grad_ptr + offsets, mask=mask, other=0.0).to(tl.float32)
-    tl.store(param_ptr + offsets, p - lr * g, mask=mask)
+    tl.store(param_ptr + offsets, p - lr * (g + weight_decay * p), mask=mask)
 
 
 def _check_sgd_inputs(
@@ -50,13 +51,19 @@ def sgd_step(
     param: torch.Tensor,
     grad: torch.Tensor,
     lr: float,
+    weight_decay: float = 0.0,
 ) -> None:
-    """Update ``param`` in-place with vanilla SGD: ``param -= lr * grad``."""
+    """Update ``param`` in-place with SGD and optional L2 weight decay."""
     _check_sgd_inputs(param, grad)
     n_elements = param.numel()
     if n_elements == 0:
         return
     kernel = as_triton_kernel(_sgd_step_kernel)
     kernel[elementwise_grid(n_elements)](
-        param, grad, lr, n_elements, BLOCK_SIZE=DEFAULT_BLOCK_SIZE
+        param,
+        grad,
+        lr,
+        weight_decay,
+        n_elements,
+        BLOCK_SIZE=DEFAULT_BLOCK_SIZE,
     )

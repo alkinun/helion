@@ -16,6 +16,21 @@ def test_sgd_step_decreases_loss() -> None:
 
 
 @cuda_required
+def test_sgd_weight_decay_matches_reference() -> None:
+    torch.manual_seed(0)
+    p = torch.randn(64, device="cuda", requires_grad=True)
+    p.grad = torch.randn(64, device="cuda")
+    before = p.detach().clone()
+    grad = p.grad.detach().clone()
+
+    opt = helion.SGD([p], lr=1e-1, weight_decay=0.01)
+    opt.step()
+
+    ref = before - 1e-1 * (grad + 0.01 * before)
+    torch.testing.assert_close(p.data, ref)
+
+
+@cuda_required
 def test_adamw_step_matches_torch() -> None:
     torch.manual_seed(0)
     p = torch.randn(64, device="cuda")

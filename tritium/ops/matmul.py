@@ -44,7 +44,7 @@ MATMUL_CONFIGS = [
 ]
 
 
-@triton.autotune(configs=MATMUL_CONFIGS, key=["N", "K"])
+@triton.autotune(configs=MATMUL_CONFIGS, key=["M", "N", "K"])
 @triton.jit
 def _matmul_kernel(
     a_ptr,

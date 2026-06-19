@@ -7,19 +7,18 @@ import triton
 import triton.language as tl
 
 from ._utils import (
-    ELEMENTWISE_BLOCK_SIZE_CONFIGS,
+    DEFAULT_BLOCK_SIZE,
     FLOAT_DTYPES,
     as_triton_kernel,
-    autotuned_elementwise_grid,
     check_cuda_tensor,
     check_supported_dtype,
+    elementwise_grid,
     requires_autograd,
 )
 
 SUPPORTED_DTYPES = FLOAT_DTYPES
 
 
-@triton.autotune(configs=ELEMENTWISE_BLOCK_SIZE_CONFIGS, key=["n_elements"])
 @triton.jit
 def _relu_forward_kernel(
     x_ptr,
@@ -35,7 +34,6 @@ def _relu_forward_kernel(
     tl.store(out_ptr + offsets, out, mask=mask)
 
 
-@triton.autotune(configs=ELEMENTWISE_BLOCK_SIZE_CONFIGS, key=["n_elements"])
 @triton.jit
 def _relu_backward_kernel(
     dy_ptr,
@@ -65,7 +63,9 @@ def _relu_forward(x: torch.Tensor) -> torch.Tensor:
         return out
     n_elements = x.numel()
     kernel = as_triton_kernel(_relu_forward_kernel)
-    kernel[autotuned_elementwise_grid(n_elements)](x, out, n_elements)
+    kernel[elementwise_grid(n_elements)](
+        x, out, n_elements, BLOCK_SIZE=DEFAULT_BLOCK_SIZE
+    )
     return out
 
 
@@ -82,7 +82,9 @@ def _relu_backward_impl(dy: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
         return dx
     n_elements = x.numel()
     kernel = as_triton_kernel(_relu_backward_kernel)
-    kernel[autotuned_elementwise_grid(n_elements)](dy, x, dx, n_elements)
+    kernel[elementwise_grid(n_elements)](
+        dy, x, dx, n_elements, BLOCK_SIZE=DEFAULT_BLOCK_SIZE
+    )
     return dx
 
 

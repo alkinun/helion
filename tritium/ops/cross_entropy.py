@@ -130,7 +130,10 @@ def _cross_entropy_backward_inplace_kernel(
     tl.store(logits_ptr + row * vocab_size + offsets, grad, mask=mask)
 
 
-@triton.autotune(configs=LINEAR_CE_FORWARD_CONFIGS, key=["hidden_size", "vocab_size"])
+@triton.autotune(
+    configs=LINEAR_CE_FORWARD_CONFIGS,
+    key=["n_rows", "hidden_size", "vocab_size"],
+)
 @triton.jit
 def _linear_cross_entropy_partial_forward_kernel(
     hidden_ptr,

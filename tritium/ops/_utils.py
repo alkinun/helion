@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import Any, Final, cast
 
 import torch
@@ -9,12 +9,6 @@ import triton
 DEFAULT_BLOCK_SIZE: Final[int] = 1024
 FLOAT_DTYPES: Final = (torch.float16, torch.bfloat16, torch.float32)
 INDEX_DTYPES: Final = (torch.int32, torch.int64)
-ELEMENTWISE_BLOCK_SIZE_CONFIGS: Final = [
-    triton.Config({"BLOCK_SIZE": 512}, num_warps=4),
-    triton.Config({"BLOCK_SIZE": 1024}, num_warps=4),
-    triton.Config({"BLOCK_SIZE": 2048}, num_warps=8),
-    triton.Config({"BLOCK_SIZE": 4096}, num_warps=8),
-]
 
 
 def as_triton_kernel(kernel: object) -> Any:
@@ -26,15 +20,6 @@ def elementwise_grid(
     n_elements: int, block_size: int = DEFAULT_BLOCK_SIZE
 ) -> tuple[int]:
     return (cast(int, triton.cdiv(n_elements, block_size)),)
-
-
-def autotuned_elementwise_grid(
-    n_elements: int,
-) -> Callable[[dict[str, Any]], tuple[int]]:
-    def grid(meta: dict[str, Any]) -> tuple[int]:
-        return (cast(int, triton.cdiv(n_elements, meta["BLOCK_SIZE"])),)
-
-    return grid
 
 
 def check_cuda_tensor(name: str, tensor: torch.Tensor) -> None:

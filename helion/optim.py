@@ -80,9 +80,7 @@ class SGD(_Optimizer):
             if p.grad is None:
                 continue
             grad = p.grad
-            if self.weight_decay != 0.0:
-                grad = grad + self.weight_decay * p.data
             if not p.is_contiguous():
                 p.data = p.data.contiguous()
             grad = grad.contiguous()
-            tritium.sgd_step(p.data, grad, self.lr)
+            tritium.sgd_step(p.data, grad, self.lr, weight_decay=self.weight_decay)
