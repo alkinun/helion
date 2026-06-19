@@ -10,9 +10,14 @@ import importlib
 import pkgutil
 
 import benchmarks
+from benchmarks._utils import bench_repeats
 
 
 def main() -> None:
+    print(
+        f"Running benchmarks with {bench_repeats()} repeats "
+        f"(set TRITIUM_BENCH_REPEATS to change)."
+    )
     for module_info in pkgutil.iter_modules(benchmarks.__path__):
         name = module_info.name
         if not name.startswith("bench_"):

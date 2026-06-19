@@ -11,15 +11,25 @@ PROVIDER_LINE_NAMES = ["PyTorch eager", "torch.compile", "Tritium"]
 PROVIDER_STYLES = [("green", "-"), ("blue", "-"), ("red", "-")]
 
 
+def bench_repeats() -> int:
+    return int(os.environ.get("TRITIUM_BENCH_REPEATS", "5"))
+
+
 def bench_ms(fn, repeats: int | None = None) -> float:
     if repeats is None:
-        repeats = int(os.environ.get("TRITIUM_BENCH_REPEATS", "5"))
+        repeats = bench_repeats()
     torch.cuda.synchronize()
     times = [float(triton.testing.do_bench(fn)) for _ in range(repeats)]
     return statistics.median(times)
 
 
 def compile_fn(fn):
+    try:
+        import torch._functorch.config as _functorch_config
+
+        _functorch_config.donated_buffer = False
+    except AttributeError:
+        pass
     return torch.compile(fn)
 
 
