@@ -141,6 +141,82 @@ def _attention_forward_kernel(
     tl.store(lse_ptr + lse_bh + q_pos, lse, mask=q_mask)
 
 
+@triton.jit
+def _attention_decode_forward_kernel(
+    q_ptr,
+    k_ptr,
+    v_ptr,
+    o_ptr,
+    lse_ptr,
+    stride_qb,
+    stride_qh,
+    stride_qs,
+    stride_qd,
+    stride_kb,
+    stride_kh,
+    stride_ks,
+    stride_kd,
+    stride_vb,
+    stride_vh,
+    stride_vs,
+    stride_vd,
+    stride_ob,
+    stride_oh,
+    stride_os,
+    stride_od,
+    n_heads,
+    kv_seq_len,
+    scale,
+    HEAD_DIM: tl.constexpr,
+    GROUP_SIZE: tl.constexpr,
+    BLOCK_KV: tl.constexpr,
+):
+    pid_bh = tl.program_id(0)
+    batch_id = pid_bh // n_heads
+    head_id = pid_bh % n_heads
+    kv_head = head_id // GROUP_SIZE
+
+    q_bh = batch_id * stride_qb + head_id * stride_qh
+    k_bh = batch_id * stride_kb + kv_head * stride_kh
+    v_bh = batch_id * stride_vb + kv_head * stride_vh
+    o_bh = batch_id * stride_ob + head_id * stride_oh
+
+    d_off = tl.arange(0, HEAD_DIM)
+    q = tl.load(q_ptr + q_bh + d_off * stride_qd)
+
+    m_i = tl.full((), -float("inf"), dtype=tl.float32)
+    l_i = tl.full((), 0.0, dtype=tl.float32)
+    acc = tl.zeros((HEAD_DIM,), dtype=tl.float32)
+
+    for kv_start in range(0, kv_seq_len, BLOCK_KV):
+        kv_pos = kv_start + tl.arange(0, BLOCK_KV)
+        kv_mask = kv_pos < kv_seq_len
+        k = tl.load(
+            k_ptr + k_bh + kv_pos[:, None] * stride_ks + d_off[None, :] * stride_kd,
+            mask=kv_mask[:, None],
+            other=0.0,
+        )
+        scores = tl.sum(k * q[None, :], axis=1).to(tl.float32) * scale
+        scores = tl.where(kv_mask, scores, -float("inf"))
+
+        m_new = tl.maximum(m_i, tl.max(scores, axis=0))
+        alpha = tl.exp(m_i - m_new)
+        p = tl.exp(scores - m_new)
+        l_i = l_i * alpha + tl.sum(p, axis=0)
+
+        v = tl.load(
+            v_ptr + v_bh + kv_pos[:, None] * stride_vs + d_off[None, :] * stride_vd,
+            mask=kv_mask[:, None],
+            other=0.0,
+        )
+        acc = acc * alpha + tl.sum(p[:, None].to(v.dtype) * v, axis=0).to(tl.float32)
+        m_i = m_new
+
+    acc = acc / l_i
+    tl.store(o_ptr + o_bh + d_off * stride_od, acc)
+    tl.store(lse_ptr + pid_bh, m_i + tl.log(l_i))
+
+
 def _check_attention_inputs(
     q: torch.Tensor,
     k: torch.Tensor,
@@ -221,6 +297,20 @@ def _attention_forward(
     if q_seq_len == 0:
         return o, lse
 
+    if q_seq_len == 1 and not is_causal:
+        _attention_decode_forward(
+            q,
+            k,
+            v,
+            o,
+            lse,
+            n_heads,
+            n_kv_heads,
+            kv_seq_len,
+            head_dim,
+        )
+        return o, lse
+
     scale = head_dim ** (-0.5)
     kernel = as_triton_kernel(_attention_forward_kernel)
 
@@ -259,6 +349,51 @@ def _attention_forward(
         IS_CAUSAL=is_causal,
     )
     return o, lse
+
+
+def _attention_decode_forward(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    o: torch.Tensor,
+    lse: torch.Tensor,
+    n_heads: int,
+    n_kv_heads: int,
+    kv_seq_len: int,
+    head_dim: int,
+) -> None:
+    scale = head_dim ** (-0.5)
+    kernel = as_triton_kernel(_attention_decode_forward_kernel)
+    kernel[(q.shape[0] * n_heads,)](
+        q,
+        k,
+        v,
+        o,
+        lse,
+        q.stride(0),
+        q.stride(1),
+        q.stride(2),
+        q.stride(3),
+        k.stride(0),
+        k.stride(1),
+        k.stride(2),
+        k.stride(3),
+        v.stride(0),
+        v.stride(1),
+        v.stride(2),
+        v.stride(3),
+        o.stride(0),
+        o.stride(1),
+        o.stride(2),
+        o.stride(3),
+        n_heads,
+        kv_seq_len,
+        scale,
+        HEAD_DIM=head_dim,
+        GROUP_SIZE=n_heads // n_kv_heads,
+        BLOCK_KV=128,
+        num_warps=4,
+    )
 
 
 @triton.jit
