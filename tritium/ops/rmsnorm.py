@@ -161,6 +161,68 @@ def _rmsnorm_backward_kernel(
 
 
 @triton.jit
+def _rmsnorm_backward_recompute_kernel(
+    dy_ptr,
+    x_ptr,
+    weight_ptr,
+    dx_ptr,
+    dweight_ptr,
+    n_rows,
+    hidden_size,
+    eps,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = tl.program_id(axis=0)
+    if row >= n_rows:
+        return
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < hidden_size
+    x = tl.load(x_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
+    dy = tl.load(dy_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
+    weight = tl.load(weight_ptr + cols, mask=mask, other=0.0).to(tl.float32)
+
+    mean_sq = tl.sum(x * x, axis=0) / hidden_size
+    rstd = 1.0 / tl.sqrt(mean_sq + eps)
+    weighted = dy * weight
+    c = tl.sum(weighted * x, axis=0)
+    dx = rstd * weighted - (rstd * rstd * rstd / hidden_size) * x * c
+    tl.store(dx_ptr + row * hidden_size + cols, dx, mask=mask)
+
+    contribution = dy * x * rstd
+    tl.atomic_add(dweight_ptr + cols, contribution, mask=mask)
+
+
+@triton.jit
+def _rmsnorm_backward_dx_recompute_kernel(
+    dy_ptr,
+    x_ptr,
+    weight_ptr,
+    rstd_ptr,
+    dx_ptr,
+    n_rows,
+    hidden_size,
+    eps,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = tl.program_id(axis=0)
+    if row >= n_rows:
+        return
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < hidden_size
+    x = tl.load(x_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
+    dy = tl.load(dy_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
+    weight = tl.load(weight_ptr + cols, mask=mask, other=0.0).to(tl.float32)
+
+    mean_sq = tl.sum(x * x, axis=0) / hidden_size
+    rstd = 1.0 / tl.sqrt(mean_sq + eps)
+    weighted = dy * weight
+    c = tl.sum(weighted * x, axis=0)
+    dx = rstd * weighted - (rstd * rstd * rstd / hidden_size) * x * c
+    tl.store(dx_ptr + row * hidden_size + cols, dx, mask=mask)
+    tl.store(rstd_ptr + row, rstd)
+
+
+@triton.jit
 def _rmsnorm_dweight_stage1_kernel(
     dy_ptr,
     x_ptr,
@@ -377,6 +439,83 @@ def _rmsnorm_backward_staged_dweight(
     return dx, dweight.to(weight.dtype)
 
 
+def _rmsnorm_backward_recompute(
+    dy2d: torch.Tensor,
+    x2d: torch.Tensor,
+    weight: torch.Tensor,
+    n_rows: int,
+    hidden: int,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    dx = torch.empty_like(x2d)
+    block_size = triton.next_power_of_2(hidden)
+
+    if _use_staged_dweight(n_rows, hidden):
+        rstd = torch.empty((n_rows,), device=x2d.device, dtype=torch.float32)
+        dx_kernel = as_triton_kernel(_rmsnorm_backward_dx_recompute_kernel)
+        dx_kernel[(n_rows,)](
+            dy2d,
+            x2d,
+            weight,
+            rstd,
+            dx,
+            n_rows,
+            hidden,
+            eps,
+            BLOCK_SIZE=block_size,
+        )
+
+        n_row_blocks = triton.cdiv(n_rows, RMSNORM_DWEIGHT_ROW_BLOCK)
+        partial = torch.empty(
+            (n_row_blocks, hidden),
+            device=x2d.device,
+            dtype=torch.float32,
+        )
+        dweight = torch.empty((hidden,), device=x2d.device, dtype=torch.float32)
+
+        col_blocks = triton.cdiv(hidden, RMSNORM_DWEIGHT_COL_BLOCK)
+        stage1 = as_triton_kernel(_rmsnorm_dweight_stage1_kernel)
+        stage1[(n_row_blocks, col_blocks)](
+            dy2d,
+            x2d,
+            rstd,
+            partial,
+            n_rows,
+            hidden,
+            BLOCK_ROWS=RMSNORM_DWEIGHT_ROW_BLOCK,
+            BLOCK_COLS=RMSNORM_DWEIGHT_COL_BLOCK,
+            num_warps=4,
+        )
+
+        row_block_power = triton.next_power_of_2(n_row_blocks)
+        stage2 = as_triton_kernel(_rmsnorm_dweight_stage2_kernel)
+        stage2[(col_blocks,)](
+            partial,
+            dweight,
+            n_row_blocks,
+            hidden,
+            BLOCK_ROW_BLOCKS=row_block_power,
+            BLOCK_COLS=RMSNORM_DWEIGHT_COL_BLOCK,
+            num_warps=8 if row_block_power >= 256 else 4,
+        )
+        return dx, dweight.to(weight.dtype)
+
+    dweight = torch.zeros((hidden,), device=x2d.device, dtype=torch.float32)
+    kernel = as_triton_kernel(_rmsnorm_backward_recompute_kernel)
+    kernel[(n_rows,)](
+        dy2d,
+        x2d,
+        weight,
+        dx,
+        dweight,
+        n_rows,
+        hidden,
+        eps,
+        BLOCK_SIZE=block_size,
+    )
+    return dx, dweight.to(weight.dtype)
+
+
 def _rmsnorm_backward_with_rstd(
     dy2d: torch.Tensor,
     x2d: torch.Tensor,
@@ -459,9 +598,18 @@ def rmsnorm_backward(
 
     x2d, n_rows, hidden = _flat_2d(x)
     dy2d = dy.contiguous().view(n_rows, hidden)
-    rstd = _compute_rstd(x2d, n_rows, hidden, eps)
-    dx, dweight = _rmsnorm_backward_with_rstd(dy2d, x2d, weight, rstd, n_rows, hidden)
-    assert dweight is not None
+    if n_rows == 0:
+        dx = torch.empty_like(x2d)
+        dweight = torch.zeros((hidden,), device=x2d.device, dtype=weight.dtype)
+    else:
+        dx, dweight = _rmsnorm_backward_recompute(
+            dy2d,
+            x2d,
+            weight,
+            n_rows,
+            hidden,
+            eps,
+        )
     return dx.view_as(x), dweight
 
 
@@ -579,7 +727,8 @@ class _ResidualRMSNormAutograd(torch.autograd.Function):
             compute_dweight=ctx.needs_input_grad[2],
         )
         assert dz is not None
-        dz = (dz + dresidual_out.view(n_rows, hidden)).view_as(residual_out)
+        dz.add_(dresidual_out.view(n_rows, hidden))
+        dz = dz.view_as(residual_out)
         dz_for_x = dz if ctx.needs_input_grad[0] else None
         dz_for_residual = dz if ctx.needs_input_grad[1] else None
         return dz_for_x, dz_for_residual, dweight, None

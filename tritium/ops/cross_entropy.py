@@ -22,6 +22,7 @@ MAX_VOCAB_BLOCK_SIZE = 131072
 LINEAR_CE_BACKWARD_MAX_LOGIT_ELEMENTS = 67_108_864
 LINEAR_CE_BACKWARD_TRITON_MAX_LOGIT_ELEMENTS = 65_536
 LINEAR_CE_BLOCK_V = 128
+LINEAR_CE_DIRECT_MAX_VOCAB = 256
 LINEAR_CE_FORWARD_CONFIGS = [
     triton.Config({"BLOCK_M": 32, "BLOCK_V": 128, "BLOCK_D": 64}, num_warps=4),
     triton.Config({"BLOCK_M": 64, "BLOCK_V": 128, "BLOCK_D": 64}, num_warps=8),
@@ -128,6 +129,64 @@ def _cross_entropy_backward_inplace_kernel(
     grad = grad * (grad_out / grad_denominator)
 
     tl.store(logits_ptr + row * vocab_size + offsets, grad, mask=mask)
+
+
+@triton.jit
+def _linear_cross_entropy_direct_forward_kernel(
+    hidden_ptr,
+    weight_ptr,
+    target_ptr,
+    loss_ptr,
+    logsumexp_ptr,
+    n_rows: tl.constexpr,
+    hidden_size: tl.constexpr,
+    vocab_size: tl.constexpr,
+    BLOCK_M: tl.constexpr,
+    BLOCK_V: tl.constexpr,
+    BLOCK_D: tl.constexpr,
+):
+    row_block = tl.program_id(axis=0)
+    rows = row_block * BLOCK_M + tl.arange(0, BLOCK_M)
+    vocab_offsets = tl.arange(0, BLOCK_V)
+    hidden_offsets = tl.arange(0, BLOCK_D)
+    row_mask = rows < n_rows
+    vocab_mask = vocab_offsets < vocab_size
+
+    logits = tl.zeros((BLOCK_M, BLOCK_V), dtype=tl.float32)
+    for hidden_start in range(0, hidden_size, BLOCK_D):
+        cols = hidden_start + hidden_offsets
+        hidden_mask = cols < hidden_size
+        hidden = tl.load(
+            hidden_ptr + rows[:, None] * hidden_size + cols[None, :],
+            mask=row_mask[:, None] & hidden_mask[None, :],
+            other=0.0,
+        )
+        weight = tl.load(
+            weight_ptr + vocab_offsets[:, None] * hidden_size + cols[None, :],
+            mask=vocab_mask[:, None] & hidden_mask[None, :],
+            other=0.0,
+        )
+        logits += tl.dot(hidden, tl.trans(weight), input_precision="ieee")
+
+    valid_mask = row_mask[:, None] & vocab_mask[None, :]
+    masked_logits = tl.where(valid_mask, logits, -float("inf"))
+    row_max = tl.max(masked_logits, axis=1)
+    exp_sum = tl.sum(tl.exp(masked_logits - row_max[:, None]), axis=1)
+    logsumexp = tl.log(exp_sum) + row_max
+
+    target = tl.load(target_ptr + rows, mask=row_mask, other=-1)
+    target_logit = tl.max(
+        tl.where(vocab_offsets[None, :] == target[:, None], logits, -float("inf")),
+        axis=1,
+    )
+    nll = logsumexp - target_logit
+    nll = tl.where(row_mask, nll, 0.0)
+
+    tl.store(logsumexp_ptr + rows, logsumexp, mask=row_mask)
+    if n_rows == 1:
+        tl.store(loss_ptr, tl.sum(nll, axis=0))
+    else:
+        tl.atomic_add(loss_ptr, tl.sum(nll, axis=0) / n_rows)
 
 
 @triton.autotune(
@@ -460,6 +519,18 @@ def _linear_ce_backward_chunk_size(n_rows: int, vocab_size: int) -> int:
     )
 
 
+def _use_linear_ce_backward_triton(
+    n_rows: int,
+    hidden_size: int,
+    vocab_size: int,
+) -> bool:
+    return (
+        hidden_size <= 64
+        and vocab_size >= 256
+        and n_rows * vocab_size <= LINEAR_CE_BACKWARD_TRITON_MAX_LOGIT_ELEMENTS
+    )
+
+
 def _cross_entropy_forward(
     logits: torch.Tensor,
     target: torch.Tensor,
@@ -507,6 +578,26 @@ def _linear_cross_entropy_forward(
     if n_rows != 1:
         loss.zero_()
     if n_rows == 0:
+        return loss, logsumexp
+
+    if vocab_size <= LINEAR_CE_DIRECT_MAX_VOCAB:
+        block_m = 16 if n_rows <= 16 else 32
+        block_v = _next_power_of_2(vocab_size)
+        direct_kernel = as_triton_kernel(_linear_cross_entropy_direct_forward_kernel)
+        direct_kernel[(_ceil_div(n_rows, block_m),)](
+            hidden_2d,
+            weight,
+            target_1d,
+            loss,
+            logsumexp,
+            n_rows,
+            hidden_size,
+            vocab_size,
+            BLOCK_M=block_m,
+            BLOCK_V=block_v,
+            BLOCK_D=64,
+            num_warps=4,
+        )
         return loss, logsumexp
 
     n_vocab_blocks = _ceil_div(vocab_size, LINEAR_CE_BLOCK_V)
@@ -821,7 +912,7 @@ def linear_cross_entropy_backward(
     if n_rows == 0:
         return dhidden, torch.zeros_like(weight)
 
-    if n_rows * vocab_size <= LINEAR_CE_BACKWARD_TRITON_MAX_LOGIT_ELEMENTS:
+    if _use_linear_ce_backward_triton(n_rows, hidden_size, vocab_size):
         return _linear_cross_entropy_backward_triton(
             grad_out,
             hidden_2d,
