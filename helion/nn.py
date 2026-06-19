@@ -152,13 +152,19 @@ class Attention(nn.Module):
 
         q_flat = q.reshape(b * s, nh, hd).contiguous()
         k_flat = k.reshape(b * s, nkv, hd).contiguous()
-        pos = torch.arange(s, device=x.device).repeat(b)
         rope_args = (self.rope_cos[:s], self.rope_sin[:s])
+        position_ids = None if b == 1 else torch.arange(s, device=x.device).repeat(b)
         if nh == nkv:
-            q_rot, k_rot = tritium.rope(q_flat, k_flat, *rope_args, position_ids=pos)
+            q_rot, k_rot = tritium.rope(
+                q_flat, k_flat, *rope_args, position_ids=position_ids
+            )
         else:
-            q_rot, _ = tritium.rope(q_flat, q_flat, *rope_args, position_ids=pos)
-            k_rot, _ = tritium.rope(k_flat, k_flat, *rope_args, position_ids=pos)
+            q_rot, _ = tritium.rope(
+                q_flat, q_flat, *rope_args, position_ids=position_ids
+            )
+            k_rot, _ = tritium.rope(
+                k_flat, k_flat, *rope_args, position_ids=position_ids
+            )
 
         def to_heads(t: torch.Tensor, n: int) -> torch.Tensor:
             return t.view(b, s, n, hd).transpose(1, 2)
@@ -186,17 +192,37 @@ class Attention(nn.Module):
         k_new = self.wk(x).view(b, 1, nkv, hd)
         v_new = self.wv(x).view(b, 1, nkv, hd)
 
-        pos_ids = torch.full((b,), pos, device=x.device, dtype=torch.int32)
         rope_args = (self.rope_cos[: pos + 1], self.rope_sin[: pos + 1])
         q_rope = q.reshape(b, nh, hd)
         k_rope = k_new.reshape(b, nkv, hd)
+        pos_ids = None
+        position_offset = pos
+        if b != 1:
+            pos_ids = torch.full((b,), pos, device=x.device, dtype=torch.int32)
+            position_offset = 0
         if nh == nkv:
             q_rot, k_rot = tritium.rope(
-                q_rope, k_rope, *rope_args, position_ids=pos_ids
+                q_rope,
+                k_rope,
+                *rope_args,
+                position_ids=pos_ids,
+                position_offset=position_offset,
             )
         else:
-            q_rot, _ = tritium.rope(q_rope, q_rope, *rope_args, position_ids=pos_ids)
-            k_rot, _ = tritium.rope(k_rope, k_rope, *rope_args, position_ids=pos_ids)
+            q_rot, _ = tritium.rope(
+                q_rope,
+                q_rope,
+                *rope_args,
+                position_ids=pos_ids,
+                position_offset=position_offset,
+            )
+            k_rot, _ = tritium.rope(
+                k_rope,
+                k_rope,
+                *rope_args,
+                position_ids=pos_ids,
+                position_offset=position_offset,
+            )
 
         k_cache[:, :, pos] = k_rot
         v_cache[:, :, pos] = v_new.view(b, nkv, hd)

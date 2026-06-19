@@ -67,3 +67,21 @@ def test_attention_forward_shape() -> None:
     x = torch.randn(2, 16, 128, device="cuda")
     out = attn(x)
     assert out.shape == x.shape
+
+
+@cuda_required
+@pytest.mark.parametrize("batch", [1, 2])
+def test_attention_forward_cached_matches_prefix(batch: int) -> None:
+    torch.manual_seed(0)
+    seq_len = 4
+    attn = helion.Attention(hidden_size=128, n_heads=4, head_dim=32, max_seq_len=16).to(
+        device="cuda", dtype=torch.float32
+    )
+    x = torch.randn(batch, seq_len, 128, device="cuda")
+    k_cache = torch.empty(batch, 4, seq_len, 32, device="cuda")
+    v_cache = torch.empty_like(k_cache)
+
+    for pos in range(seq_len):
+        out = attn.forward_cached(x[:, pos : pos + 1], k_cache, v_cache, pos)
+        ref = attn(x[:, : pos + 1])[:, -1:]
+        torch.testing.assert_close(out, ref, rtol=2e-2, atol=2e-2)

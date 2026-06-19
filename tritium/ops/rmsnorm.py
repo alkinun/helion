@@ -17,9 +17,12 @@ from ._utils import (
 
 SUPPORTED_DTYPES = FLOAT_DTYPES
 MAX_RMSNORM_HIDDEN_NEXT_POW2 = 65536
-RMSNORM_DWEIGHT_COL_BLOCK = 32
-RMSNORM_DWEIGHT_ROW_BLOCK = 16
-RMSNORM_STAGED_DWEIGHT_MIN_ROWS = 512
+RMSNORM_DWEIGHT_COL_BLOCK = 64
+RMSNORM_DWEIGHT_ROW_BLOCK = 128
+RMSNORM_STAGED_DWEIGHT_MIN_HIDDEN = 512
+RMSNORM_STAGED_DWEIGHT_EAGER_MIN_HIDDEN = 1024
+RMSNORM_STAGED_DWEIGHT_MIN_ROWS = 64
+RMSNORM_STAGED_DWEIGHT_EAGER_MIN_ROWS = 2
 RMSNORM_STAGED_DWEIGHT_MAX_ROW_BLOCKS = 1024
 
 
@@ -303,12 +306,16 @@ def _compute_rstd(
     return rstd
 
 
-def _use_staged_dweight(n_rows: int) -> bool:
+def _use_staged_dweight(n_rows: int, hidden: int) -> bool:
     n_row_blocks = triton.cdiv(n_rows, RMSNORM_DWEIGHT_ROW_BLOCK)
-    return (
-        n_rows >= RMSNORM_STAGED_DWEIGHT_MIN_ROWS
-        and n_row_blocks <= RMSNORM_STAGED_DWEIGHT_MAX_ROW_BLOCKS
-    )
+    if hidden >= RMSNORM_STAGED_DWEIGHT_EAGER_MIN_HIDDEN:
+        min_rows = RMSNORM_STAGED_DWEIGHT_EAGER_MIN_ROWS
+    elif hidden >= RMSNORM_STAGED_DWEIGHT_MIN_HIDDEN:
+        min_rows = RMSNORM_STAGED_DWEIGHT_MIN_ROWS
+    else:
+        return False
+
+    return n_rows >= min_rows and n_row_blocks <= RMSNORM_STAGED_DWEIGHT_MAX_ROW_BLOCKS
 
 
 def _rmsnorm_backward_staged_dweight(
@@ -389,7 +396,7 @@ def _rmsnorm_backward_with_rstd(
 
     block_size = triton.next_power_of_2(hidden)
     if compute_dweight:
-        if _use_staged_dweight(n_rows):
+        if _use_staged_dweight(n_rows, hidden):
             return _rmsnorm_backward_staged_dweight(
                 dy2d,
                 x2d,
