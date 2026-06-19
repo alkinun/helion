@@ -8,6 +8,7 @@ from .cross_entropy import (
     linear_cross_entropy,
     linear_cross_entropy_backward,
 )
+from .dropout import dropout, dropout_backward
 from .gelu import add_gelu, gelu, gelu_backward
 from .matmul import matmul
 from .relu import relu
@@ -24,6 +25,8 @@ __all__ = [
     "attention",
     "cross_entropy",
     "cross_entropy_backward",
+    "dropout",
+    "dropout_backward",
     "gelu",
     "gelu_backward",
     "linear_cross_entropy",

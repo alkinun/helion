@@ -49,6 +49,41 @@ def test_swiglu_forward() -> None:
 
 
 @cuda_required
+def test_dropout_training_applies() -> None:
+    layer = helion.Dropout(p=0.5).to(device="cuda", dtype=torch.float32)
+    layer.train()
+    x = torch.randn(8192, device="cuda", dtype=torch.float32)
+    out = layer(x)
+    keep_rate = (out != 0).to(torch.float32).mean()
+    torch.testing.assert_close(
+        keep_rate, torch.tensor(0.5, device="cuda"), rtol=0.05, atol=0.02
+    )
+    kept = out != 0
+    torch.testing.assert_close(out[kept], x[kept] * 2.0)
+
+
+@cuda_required
+def test_dropout_eval_is_identity() -> None:
+    layer = helion.Dropout(p=0.5).to(device="cuda", dtype=torch.float32)
+    layer.eval()
+    x = torch.randn(1024, device="cuda", dtype=torch.float32)
+    assert layer(x) is x
+
+
+@cuda_required
+def test_dropout_p_zero_is_identity() -> None:
+    layer = helion.Dropout(p=0.0).to(device="cuda", dtype=torch.float32)
+    layer.train()
+    x = torch.randn(1024, device="cuda", dtype=torch.float32)
+    assert layer(x) is x
+
+
+def test_dropout_rejects_invalid_p() -> None:
+    with pytest.raises(ValueError, match="0 <= p < 1"):
+        helion.Dropout(p=1.0)
+
+
+@cuda_required
 def test_residual_rmsnorm_returns_pair() -> None:
     norm = helion.ResidualRMSNorm(64).to(device="cuda", dtype=torch.float32)
     delta = torch.randn(4, 64, device="cuda")

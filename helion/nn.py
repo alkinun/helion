@@ -85,6 +85,21 @@ class SwiGLU(nn.Module):
         return tritium.swiglu(gate, up)
 
 
+class Dropout(nn.Module):
+    p: float
+
+    def __init__(self, p: float = 0.5) -> None:
+        super().__init__()
+        if not 0.0 <= p < 1.0:
+            raise ValueError(f"Dropout probability p must satisfy 0 <= p < 1, got {p}.")
+        self.p = p
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if not self.training or self.p == 0:
+            return x
+        return tritium.dropout(x, self.p)
+
+
 class ResidualRMSNorm(nn.Module):
     weight: nn.Parameter
 

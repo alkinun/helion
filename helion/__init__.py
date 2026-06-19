@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
-from .nn import Attention, Embedding, Linear, ResidualRMSNorm, RMSNorm, SwiGLU
+from .nn import Attention, Dropout, Embedding, Linear, ResidualRMSNorm, RMSNorm, SwiGLU
 from .optim import SGD, AdamW
 from .training import CosineLR, clip_grad_norm
 
@@ -16,6 +16,7 @@ __all__ = [
     "AdamW",
     "Attention",
     "CosineLR",
+    "Dropout",
     "Embedding",
     "Linear",
     "ResidualRMSNorm",
