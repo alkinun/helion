@@ -56,7 +56,10 @@ class Linear(nn.Module):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         *leading_dims, in_features = x.shape
         x = x.reshape(-1, in_features)
-        x = tritium.matmul(x, self.weight.T)
+        if x.shape[0] == 1 and not torch.is_grad_enabled():
+            x = tritium.matmul_vec(x.reshape(in_features), self.weight.T).reshape(1, -1)
+        else:
+            x = tritium.matmul(x, self.weight.T)
         if self.bias is not None:
             x = x + self.bias
         return x.reshape(*leading_dims, self.out_features)

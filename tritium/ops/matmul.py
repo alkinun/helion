@@ -95,6 +95,40 @@ def _matmul_kernel(
     tl.store(c_ptrs, accumulator, mask=c_mask)
 
 
+@triton.jit
+def _matmul_vec_kernel(
+    a_ptr,
+    b_ptr,
+    c_ptr,
+    N,
+    K,
+    stride_ak,
+    stride_bk,
+    stride_bn,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+):
+    pid_n = tl.program_id(axis=0)
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = tl.arange(0, BLOCK_K)
+
+    accumulator = tl.zeros((BLOCK_N,), dtype=tl.float32)
+    for k_start in range(0, K, BLOCK_K):
+        k_offsets = k_start + offs_k
+        k_mask = k_offsets < K
+        a = tl.load(a_ptr + k_offsets * stride_ak, mask=k_mask, other=0.0).to(
+            tl.float32
+        )
+        b = tl.load(
+            b_ptr + k_offsets[:, None] * stride_bk + offs_n[None, :] * stride_bn,
+            mask=k_mask[:, None] & (offs_n[None, :] < N),
+            other=0.0,
+        ).to(tl.float32)
+        accumulator += tl.sum(a[:, None] * b, axis=0)
+
+    tl.store(c_ptr + offs_n, accumulator, mask=offs_n < N)
+
+
 def _check_matmul_inputs(a: torch.Tensor, b: torch.Tensor) -> tuple[int, int, int]:
     check_cuda_tensor("a", a)
     check_cuda_tensor("b", b)
@@ -124,6 +158,37 @@ def _check_matmul_inputs(a: torch.Tensor, b: torch.Tensor) -> tuple[int, int, in
         raise ValueError(f"Device mismatch: a is on {a.device}, b is on {b.device}.")
 
     return m, n, k
+
+
+def _check_matmul_vec_inputs(a: torch.Tensor, b: torch.Tensor) -> tuple[int, int]:
+    check_cuda_tensor("a", a)
+    check_cuda_tensor("b", b)
+    check_supported_dtype("a", a, SUPPORTED_DTYPES)
+    check_supported_dtype("b", b, SUPPORTED_DTYPES)
+
+    if a.dim() != 1:
+        raise ValueError("a must be a 1D tensor shaped (K,).")
+
+    if b.dim() != 2:
+        raise ValueError("b must be a 2D tensor shaped (K, N).")
+
+    k = a.shape[0]
+    k2, n = b.shape
+    if k != k2:
+        raise ValueError(
+            f"Shape mismatch: a has shape {tuple(a.shape)}, "
+            f"b has shape {tuple(b.shape)}."
+        )
+
+    if a.dtype != b.dtype:
+        raise ValueError(
+            f"Dtype mismatch: a has dtype {a.dtype}, b has dtype {b.dtype}."
+        )
+
+    if a.device != b.device:
+        raise ValueError(f"Device mismatch: a is on {a.device}, b is on {b.device}.")
+
+    return n, k
 
 
 def _matmul_grid(m: int, n: int) -> Any:
@@ -169,6 +234,30 @@ def _matmul_forward(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
         return c
 
     _launch_matmul(a, b, c, m, n, k)
+    return c
+
+
+def _matmul_vec_forward(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    n, k = _check_matmul_vec_inputs(a, b)
+
+    c = torch.empty((n,), device=a.device, dtype=a.dtype)
+    if n == 0:
+        return c
+
+    kernel = as_triton_kernel(_matmul_vec_kernel)
+    kernel[(triton.cdiv(n, 64),)](
+        a,
+        b,
+        c,
+        n,
+        k,
+        a.stride(0),
+        b.stride(0),
+        b.stride(1),
+        BLOCK_N=64,
+        BLOCK_K=64,
+        num_warps=4,
+    )
     return c
 
 
@@ -249,3 +338,10 @@ def matmul(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
     if not requires_autograd(a, b):
         return _matmul_forward(a, b)
     return _MatMulAutograd.apply(a, b)
+
+
+def matmul_vec(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
+    """Return the vector-matrix product ``a @ b`` for ``a`` shaped ``(K,)``."""
+    if requires_autograd(a, b):
+        return matmul(a.unsqueeze(0), b).squeeze(0)
+    return _matmul_vec_forward(a, b)

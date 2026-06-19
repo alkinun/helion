@@ -31,6 +31,19 @@ def test_linear_autograd() -> None:
 
 @cuda_required
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_linear_single_token_no_grad_matches_torch(dtype: torch.dtype) -> None:
+    layer = helion.Linear(64, 32, bias=True).to(device="cuda", dtype=dtype)
+    ref = nn.Linear(64, 32).to(device="cuda", dtype=dtype)
+    ref.weight.data.copy_(layer.weight.data)
+    ref.bias.data.copy_(layer.bias.data)
+
+    x = torch.randn(1, 1, 64, device="cuda", dtype=dtype)
+    with torch.no_grad():
+        torch.testing.assert_close(layer(x), ref(x), rtol=2e-2, atol=2e-2)
+
+
+@cuda_required
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_rmsnorm_forward(dtype: torch.dtype) -> None:
     norm = helion.RMSNorm(64).to(device="cuda", dtype=dtype)
     x = torch.randn(8, 64, device="cuda", dtype=dtype)

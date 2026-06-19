@@ -378,7 +378,10 @@ def generate_cached(
         hidden, _ = model.final_norm(delta, residual)
 
         if pos >= len(ids) - 1:
-            logits = tritium.matmul(hidden.reshape(1, -1), model.lm_head.T.contiguous())
+            logits = tritium.matmul_vec(
+                hidden.reshape(-1),
+                model.lm_head.T.contiguous(),
+            )
             next_id = sample_next_token(
                 logits,
                 temperature=temperature,
