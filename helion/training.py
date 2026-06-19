@@ -1,11 +1,36 @@
 from __future__ import annotations
 
 import math
+import random
 
 import torch
 import torch.nn as nn
 
 from .optim import _Optimizer
+
+
+def seed_all(seed: int) -> None:
+    """Seed every RNG Helion touches for reproducible runs.
+
+    Seeds the stdlib ``random`` module, torch's CPU generator, all CUDA
+    generators, and ``numpy`` (when installed).  Triton kernels draw their seeds
+    from torch's generator, so this also makes Triton ops such as
+    :class:`~helion.Dropout` reproducible.
+
+    Note: for bitwise-identical results you may additionally need
+    ``torch.use_deterministic_algorithms(True)``; seeding alone does not
+    constrain non-deterministic parallel reductions.
+    """
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    try:
+        import numpy as np
+    except ImportError:
+        pass
+    else:
+        np.random.seed(seed)
 
 
 def clip_grad_norm(

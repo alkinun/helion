@@ -188,6 +188,67 @@ def test_average_meter_repr_runs() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# seed_all
+# --------------------------------------------------------------------------- #
+
+
+def test_seed_all_makes_torch_reproducible() -> None:
+    helion.seed_all(123)
+    a = torch.randn(64)
+    helion.seed_all(123)
+    b = torch.randn(64)
+    torch.testing.assert_close(a, b)
+
+
+def test_seed_all_different_seeds_differ() -> None:
+    helion.seed_all(1)
+    a = torch.randn(64)
+    helion.seed_all(2)
+    b = torch.randn(64)
+    assert not torch.equal(a, b)
+
+
+def test_seed_all_makes_python_random_reproducible() -> None:
+    import random
+
+    helion.seed_all(999)
+    a = [random.random() for _ in range(5)]
+    helion.seed_all(999)
+    b = [random.random() for _ in range(5)]
+    assert a == b
+
+
+def test_seed_all_seeds_numpy_when_available() -> None:
+    np = pytest.importorskip("numpy")
+    helion.seed_all(42)
+    a = np.random.rand(64)
+    helion.seed_all(42)
+    b = np.random.rand(64)
+    np.testing.assert_allclose(a, b)
+
+
+@cuda_required
+def test_seed_all_makes_cuda_reproducible() -> None:
+    helion.seed_all(7)
+    a = torch.randn(64, device="cuda")
+    helion.seed_all(7)
+    b = torch.randn(64, device="cuda")
+    torch.testing.assert_close(a, b)
+
+
+@cuda_required
+def test_seed_all_makes_triton_dropout_reproducible() -> None:
+    import tritium
+
+    helion.seed_all(5)
+    x = torch.randn(4096, device="cuda", dtype=torch.float32)
+    a = tritium.dropout(x, p=0.3)
+    helion.seed_all(5)
+    b = tritium.dropout(x, p=0.3)
+    torch.testing.assert_close(a, b)
+
+
+# --------------------------------------------------------------------------- #
 # GradientAccumulator
 # --------------------------------------------------------------------------- #
 
