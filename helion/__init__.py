@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from importlib.metadata import PackageNotFoundError, version
 
+from .amp import GradScaler, autocast
 from .checkpoint import checkpoint
 from .nn import (
     Attention,
@@ -29,6 +30,7 @@ __all__ = [
     "CosineLR",
     "Dropout",
     "Embedding",
+    "GradScaler",
     "LayerNorm",
     "Linear",
     "ResidualRMSNorm",
@@ -36,6 +38,7 @@ __all__ = [
     "SGD",
     "Softmax",
     "SwiGLU",
+    "autocast",
     "checkpoint",
     "clip_grad_norm",
 ]
