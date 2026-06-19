@@ -8,7 +8,16 @@ import torch.nn as nn
 import tritium
 
 
-class AdamW:
+class _Optimizer:
+    def __init__(self, params: Iterable[nn.Parameter]) -> None:
+        self.params = list(params)
+
+    def zero_grad(self) -> None:
+        for p in self.params:
+            p.grad = None
+
+
+class AdamW(_Optimizer):
     def __init__(
         self,
         params: Iterable[nn.Parameter],
@@ -17,7 +26,7 @@ class AdamW:
         eps: float = 1e-8,
         weight_decay: float = 0.01,
     ) -> None:
-        self.params = list(params)
+        super().__init__(params)
         self.lr = lr
         self.beta1, self.beta2 = betas
         self.eps = eps
@@ -31,10 +40,6 @@ class AdamW:
         }
         self._step = 0
 
-    def zero_grad(self) -> None:
-        for p in self.params:
-            p.grad = None
-
     @torch.no_grad()
     def step(self) -> None:
         self._step += 1
@@ -46,7 +51,7 @@ class AdamW:
                 p.data = p.data.contiguous()
             tritium.adamw_step(
                 p.data,
-                p.grad,
+                p.grad.contiguous(),
                 exp_avg,
                 exp_avg_sq,
                 lr=self.lr,
@@ -58,20 +63,16 @@ class AdamW:
             )
 
 
-class SGD:
+class SGD(_Optimizer):
     def __init__(
         self,
         params: Iterable[nn.Parameter],
         lr: float,
         weight_decay: float = 0.0,
     ) -> None:
-        self.params = list(params)
+        super().__init__(params)
         self.lr = lr
         self.weight_decay = weight_decay
-
-    def zero_grad(self) -> None:
-        for p in self.params:
-            p.grad = None
 
     @torch.no_grad()
     def step(self) -> None:
@@ -83,4 +84,5 @@ class SGD:
                 grad = grad + self.weight_decay * p.data
             if not p.is_contiguous():
                 p.data = p.data.contiguous()
+            grad = grad.contiguous()
             tritium.sgd_step(p.data, grad, self.lr)

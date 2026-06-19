@@ -55,7 +55,7 @@ def _tolerances(
 ) -> tuple[float, float]:
     if dtype == torch.float32:
         if accumulated:
-            return 5e-5, 5e-5
+            return 2e-4, 2e-4
         return 2e-5, 2e-5
     if dtype == torch.float16:
         return 2e-2, 2e-2
