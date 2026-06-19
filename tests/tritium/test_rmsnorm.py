@@ -3,12 +3,6 @@ import torch
 from _utils import cuda_required
 
 import tritium
-from tritium.ops.rmsnorm import (
-    RMSNORM_BACKWARD_PARTIAL_REDUCE,
-    RMSNORM_BACKWARD_SINGLE_ROW,
-    _rmsnorm_backward_atomic,
-    _select_rmsnorm_backward_variant,
-)
 
 DTYPES = [torch.float32, torch.float16, torch.bfloat16]
 HIDDEN_SIZES = [1024, 1536, 2048, 2560, 3072, 3584, 4096, 5120, 6144, 8192, 11008]
@@ -76,20 +70,6 @@ def _assert_close(
 ) -> None:
     rtol, atol = _tolerances(actual.dtype, accumulated=accumulated)
     torch.testing.assert_close(actual, expected, rtol=rtol, atol=atol)
-
-
-@pytest.mark.parametrize(
-    ("n_rows", "expected"),
-    [
-        (1, RMSNORM_BACKWARD_SINGLE_ROW),
-        (2, RMSNORM_BACKWARD_PARTIAL_REDUCE),
-        (16, RMSNORM_BACKWARD_PARTIAL_REDUCE),
-        (64, RMSNORM_BACKWARD_PARTIAL_REDUCE),
-        (128, RMSNORM_BACKWARD_PARTIAL_REDUCE),
-    ],
-)
-def test_rmsnorm_backward_variant_selection(n_rows: int, expected: str) -> None:
-    assert _select_rmsnorm_backward_variant(n_rows) == expected
 
 
 @cuda_required
@@ -251,26 +231,6 @@ def test_residual_rmsnorm_autograd_backward_error(
     _assert_close(x.grad, ref_dz)
     _assert_close(residual.grad, ref_dz)
     _assert_close(weight.grad, ref_dweight, accumulated=True)
-
-
-@cuda_required
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize("hidden_size", [1024, 4096, 11008])
-@pytest.mark.parametrize("n_rows", [1, 16, 128])
-def test_rmsnorm_backward_atomic_variant_error(
-    dtype: torch.dtype,
-    hidden_size: int,
-    n_rows: int,
-) -> None:
-    x = torch.randn(n_rows, hidden_size, device="cuda", dtype=dtype)
-    weight = torch.randn(hidden_size, device="cuda", dtype=dtype)
-    dy = torch.randn_like(x)
-
-    dx, dweight = _rmsnorm_backward_atomic(dy, x, weight)
-    ref_dx, ref_dweight = _rmsnorm_backward_reference(dy, x, weight, eps=1e-6)
-
-    _assert_close(dx, ref_dx)
-    _assert_close(dweight, ref_dweight, accumulated=True)
 
 
 @cuda_required

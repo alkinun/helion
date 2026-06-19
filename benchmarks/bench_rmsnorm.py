@@ -12,10 +12,6 @@ from benchmarks._utils import (
     gbps,
     require_cuda,
 )
-from tritium.ops.rmsnorm import (
-    _rmsnorm_backward_atomic,
-    _rmsnorm_backward_partial_reduce,
-)
 
 
 def _torch_rmsnorm(
@@ -295,62 +291,8 @@ def residual_backward_benchmark(
     return gbps(bytes_moved, ms)
 
 
-@triton.testing.perf_report(
-    triton.testing.Benchmark(
-        x_names=["n_rows", "hidden_size"],
-        x_vals=[
-            (1, 1024),
-            (16, 1024),
-            (128, 1024),
-            (1024, 1024),
-            (4096, 1024),
-            (128, 2048),
-            (128, 4096),
-            (128, 8192),
-        ],
-        line_arg="variant",
-        line_vals=["partial_reduce", "atomic"],
-        line_names=["partial + reduce", "atomic"],
-        styles=[("green", "-"), ("red", "-")],
-        ylabel="effective GB/s",
-        plot_name="rmsnorm-backward-variant-performance",
-        args={},
-    )
-)
-def backward_variant_benchmark(
-    n_rows: int,
-    hidden_size: int,
-    variant: str,
-) -> float:
-    require_cuda()
-
-    x = torch.randn(n_rows, hidden_size, device="cuda", dtype=torch.float16)
-    weight = torch.randn(hidden_size, device="cuda", dtype=torch.float16)
-    dy = torch.randn_like(x)
-    eps = 1e-6
-
-    if variant == "partial_reduce":
-        ms = bench_ms(
-            lambda: _rmsnorm_backward_partial_reduce(
-                dy,
-                x,
-                weight,
-                eps,
-            )
-        )
-    elif variant == "atomic":
-        ms = bench_ms(lambda: _rmsnorm_backward_atomic(dy, x, weight, eps))
-    else:
-        raise ValueError(f"Unknown variant: {variant}")
-
-    # Logical bytes: read dy/x/weight, write dx/dweight.
-    bytes_moved = (3 * x.numel() + x.numel() + weight.numel()) * x.element_size()
-    return gbps(bytes_moved, ms)
-
-
 if __name__ == "__main__":
     benchmark.run(print_data=True, show_plots=True)
     residual_benchmark.run(print_data=True, show_plots=True)
     backward_benchmark.run(print_data=True, show_plots=True)
     residual_backward_benchmark.run(print_data=True, show_plots=True)
-    backward_variant_benchmark.run(print_data=True, show_plots=True)

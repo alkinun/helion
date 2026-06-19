@@ -18,9 +18,6 @@ from ._utils import (
 SUPPORTED_DTYPES = FLOAT_DTYPES
 MAX_RMSNORM_HIDDEN_NEXT_POW2 = 65536
 
-RMSNORM_BACKWARD_SINGLE_ROW = "single_row"
-RMSNORM_BACKWARD_PARTIAL_REDUCE = "partial_reduce"
-
 
 @triton.jit
 def _rmsnorm_forward_kernel(
@@ -80,12 +77,9 @@ def _residual_rmsnorm_forward_kernel(
 
 
 @triton.jit
-def _rmsnorm_dx_kernel(
-    dy_ptr,
+def _rmsnorm_rstd_kernel(
     x_ptr,
-    weight_ptr,
-    dx_ptr,
-    dweight_partial_ptr,
+    rstd_ptr,
     n_rows,
     hidden_size,
     eps,
@@ -97,56 +91,47 @@ def _rmsnorm_dx_kernel(
     cols = tl.arange(0, BLOCK_SIZE)
     mask = cols < hidden_size
     x = tl.load(x_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
+    mean_sq = tl.sum(x * x, axis=0) / hidden_size
+    tl.store(rstd_ptr + row, 1.0 / tl.sqrt(mean_sq + eps))
+
+
+@triton.jit
+def _rmsnorm_backward_dx_kernel(
+    dy_ptr,
+    x_ptr,
+    weight_ptr,
+    rstd_ptr,
+    dx_ptr,
+    n_rows,
+    hidden_size,
+    BLOCK_SIZE: tl.constexpr,
+):
+    row = tl.program_id(axis=0)
+    if row >= n_rows:
+        return
+    cols = tl.arange(0, BLOCK_SIZE)
+    mask = cols < hidden_size
+    x = tl.load(x_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
     dy = tl.load(dy_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
     weight = tl.load(weight_ptr + cols, mask=mask, other=0.0).to(tl.float32)
-
-    mean_sq = tl.sum(x * x, axis=0) / hidden_size
-    rstd = 1.0 / tl.sqrt(mean_sq + eps)
+    rstd = tl.load(rstd_ptr + row)
 
     weighted = dy * weight
     c = tl.sum(weighted * x, axis=0)
     dx = rstd * weighted - (rstd * rstd * rstd / hidden_size) * x * c
     tl.store(dx_ptr + row * hidden_size + cols, dx, mask=mask)
 
-    contribution = dy * x * rstd
-    tl.store(dweight_partial_ptr + row * hidden_size + cols, contribution, mask=mask)
-
 
 @triton.jit
-def _rmsnorm_dweight_reduce_kernel(
-    dweight_partial_ptr,
-    dweight_ptr,
-    n_rows,
-    hidden_size,
-    BLOCK_ROW: tl.constexpr,
-    BLOCK_COL: tl.constexpr,
-):
-    col_block = tl.program_id(axis=0)
-    col_offs = col_block * BLOCK_COL + tl.arange(0, BLOCK_COL)
-    col_mask = col_offs < hidden_size
-    acc = tl.zeros((BLOCK_COL,), dtype=tl.float32)
-    for row_start in range(0, n_rows, BLOCK_ROW):
-        row_offs = row_start + tl.arange(0, BLOCK_ROW)
-        row_mask = row_offs < n_rows
-        block = tl.load(
-            dweight_partial_ptr + row_offs[:, None] * hidden_size + col_offs[None, :],
-            mask=row_mask[:, None] & col_mask[None, :],
-            other=0.0,
-        )
-        acc += tl.sum(block, axis=0)
-    tl.store(dweight_ptr + col_offs, acc, mask=col_mask)
-
-
-@triton.jit
-def _rmsnorm_dx_atomic_kernel(
+def _rmsnorm_backward_kernel(
     dy_ptr,
     x_ptr,
     weight_ptr,
+    rstd_ptr,
     dx_ptr,
     dweight_ptr,
     n_rows,
     hidden_size,
-    eps,
     BLOCK_SIZE: tl.constexpr,
 ):
     row = tl.program_id(axis=0)
@@ -157,9 +142,7 @@ def _rmsnorm_dx_atomic_kernel(
     x = tl.load(x_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
     dy = tl.load(dy_ptr + row * hidden_size + cols, mask=mask, other=0.0).to(tl.float32)
     weight = tl.load(weight_ptr + cols, mask=mask, other=0.0).to(tl.float32)
-
-    mean_sq = tl.sum(x * x, axis=0) / hidden_size
-    rstd = 1.0 / tl.sqrt(mean_sq + eps)
+    rstd = tl.load(rstd_ptr + row)
 
     weighted = dy * weight
     c = tl.sum(weighted * x, axis=0)
@@ -239,108 +222,71 @@ def _rmsnorm_forward(
     return out.view_as(x), rstd
 
 
-def _select_rmsnorm_backward_variant(n_rows: int) -> str:
-    if n_rows == 1:
-        return RMSNORM_BACKWARD_SINGLE_ROW
-    return RMSNORM_BACKWARD_PARTIAL_REDUCE
-
-
-def _rmsnorm_backward_single_row(
-    dy: torch.Tensor,
-    x: torch.Tensor,
-    weight: torch.Tensor,
-    eps: float,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    hidden_size = _check_rmsnorm_inputs(x, weight)
-    x2d, n_rows, hidden = _flat_2d(x)
-    dy2d = dy.contiguous().view(n_rows, hidden)
-    dx = torch.empty_like(x2d)
-    dweight_partial = torch.empty_like(x2d, dtype=torch.float32)
-
-    block_size = triton.next_power_of_2(hidden_size)
-    kernel = as_triton_kernel(_rmsnorm_dx_kernel)
+def _compute_rstd(
+    x2d: torch.Tensor, n_rows: int, hidden: int, eps: float
+) -> torch.Tensor:
+    rstd = torch.empty((n_rows,), device=x2d.device, dtype=torch.float32)
+    if n_rows == 0:
+        return rstd
+    block_size = triton.next_power_of_2(hidden)
+    kernel = as_triton_kernel(_rmsnorm_rstd_kernel)
     kernel[(n_rows,)](
-        dy2d,
         x2d,
-        weight,
-        dx,
-        dweight_partial,
+        rstd,
         n_rows,
-        hidden_size,
+        hidden,
         eps,
         BLOCK_SIZE=block_size,
     )
-    return dx.view_as(x), dweight_partial.view_as(x).reshape(hidden_size).to(
-        weight.dtype
-    )
+    return rstd
 
 
-def _rmsnorm_backward_partial_reduce(
-    dy: torch.Tensor,
-    x: torch.Tensor,
+def _rmsnorm_backward_with_rstd(
+    dy2d: torch.Tensor,
+    x2d: torch.Tensor,
     weight: torch.Tensor,
-    eps: float = 1e-6,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    hidden_size = _check_rmsnorm_inputs(x, weight)
-    x2d, n_rows, hidden = _flat_2d(x)
-    dy2d = dy.contiguous().view(n_rows, hidden)
+    rstd: torch.Tensor,
+    n_rows: int,
+    hidden: int,
+    *,
+    compute_dweight: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     dx = torch.empty_like(x2d)
-    dweight_partial = torch.empty_like(x2d, dtype=torch.float32)
+    dweight: torch.Tensor | None = None
+    if n_rows == 0:
+        if compute_dweight:
+            dweight = torch.zeros((hidden,), device=x2d.device, dtype=weight.dtype)
+        return dx, dweight
 
-    block_size = triton.next_power_of_2(hidden_size)
-    dx_kernel = as_triton_kernel(_rmsnorm_dx_kernel)
-    dx_kernel[(n_rows,)](
-        dy2d,
-        x2d,
-        weight,
-        dx,
-        dweight_partial,
-        n_rows,
-        hidden_size,
-        eps,
-        BLOCK_SIZE=block_size,
-    )
-
-    dweight = torch.zeros((hidden_size,), device=x.device, dtype=torch.float32)
-    block_col = min(triton.next_power_of_2(hidden_size), 1024)
-    reduce_kernel = as_triton_kernel(_rmsnorm_dweight_reduce_kernel)
-    reduce_kernel[(triton.cdiv(hidden_size, block_col),)](
-        dweight_partial,
-        dweight,
-        n_rows,
-        hidden_size,
-        BLOCK_ROW=16,
-        BLOCK_COL=block_col,
-    )
-    return dx.view_as(x), dweight.to(weight.dtype)
-
-
-def _rmsnorm_backward_atomic(
-    dy: torch.Tensor,
-    x: torch.Tensor,
-    weight: torch.Tensor,
-    eps: float = 1e-6,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    hidden_size = _check_rmsnorm_inputs(x, weight)
-    x2d, n_rows, hidden = _flat_2d(x)
-    dy2d = dy.contiguous().view(n_rows, hidden)
-    dx = torch.empty_like(x2d)
-    dweight = torch.zeros((hidden_size,), device=x.device, dtype=torch.float32)
-
-    block_size = triton.next_power_of_2(hidden_size)
-    kernel = as_triton_kernel(_rmsnorm_dx_atomic_kernel)
-    kernel[(n_rows,)](
-        dy2d,
-        x2d,
-        weight,
-        dx,
-        dweight,
-        n_rows,
-        hidden_size,
-        eps,
-        BLOCK_SIZE=block_size,
-    )
-    return dx.view_as(x), dweight.to(weight.dtype)
+    block_size = triton.next_power_of_2(hidden)
+    if compute_dweight:
+        dweight = torch.zeros((hidden,), device=x2d.device, dtype=torch.float32)
+        kernel = as_triton_kernel(_rmsnorm_backward_kernel)
+        kernel[(n_rows,)](
+            dy2d,
+            x2d,
+            weight,
+            rstd,
+            dx,
+            dweight,
+            n_rows,
+            hidden,
+            BLOCK_SIZE=block_size,
+        )
+        dweight = dweight.to(weight.dtype)
+    else:
+        kernel = as_triton_kernel(_rmsnorm_backward_dx_kernel)
+        kernel[(n_rows,)](
+            dy2d,
+            x2d,
+            weight,
+            rstd,
+            dx,
+            n_rows,
+            hidden,
+            BLOCK_SIZE=block_size,
+        )
+    return dx, dweight
 
 
 def rmsnorm_backward(
@@ -350,7 +296,7 @@ def rmsnorm_backward(
     eps: float = 1e-6,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Return ``(dx, dweight)`` for ``rmsnorm`` recomputing rstd from ``x``."""
-    hidden_size = _check_rmsnorm_inputs(x, weight)
+    _check_rmsnorm_inputs(x, weight)
     check_cuda_tensor("dy", dy)
     if dy.shape != x.shape:
         raise ValueError(
@@ -365,11 +311,12 @@ def rmsnorm_backward(
         raise ValueError(f"Device mismatch: dy is on {dy.device}, x is on {x.device}.")
     check_contiguous("dy", dy, "for tritium.rmsnorm_backward")
 
-    n_rows = dy.numel() // hidden_size
-    variant = _select_rmsnorm_backward_variant(n_rows)
-    if variant == RMSNORM_BACKWARD_SINGLE_ROW:
-        return _rmsnorm_backward_single_row(dy, x, weight, eps)
-    return _rmsnorm_backward_partial_reduce(dy, x, weight, eps)
+    x2d, n_rows, hidden = _flat_2d(x)
+    dy2d = dy.contiguous().view(n_rows, hidden)
+    rstd = _compute_rstd(x2d, n_rows, hidden, eps)
+    dx, dweight = _rmsnorm_backward_with_rstd(dy2d, x2d, weight, rstd, n_rows, hidden)
+    assert dweight is not None
+    return dx.view_as(x), dweight
 
 
 class _RMSNormAutograd(torch.autograd.Function):
@@ -382,7 +329,6 @@ class _RMSNormAutograd(torch.autograd.Function):
     ) -> torch.Tensor:
         out, rstd = _rmsnorm_forward(x, weight, eps)
         ctx.save_for_backward(x, weight, rstd)
-        ctx.eps = eps
         return out
 
     @staticmethod
@@ -396,11 +342,18 @@ class _RMSNormAutograd(torch.autograd.Function):
         dy = grad_outputs[0]
         if not dy.is_contiguous():
             dy = dy.contiguous()
-        dx, dweight = rmsnorm_backward(dy, x, weight, ctx.eps)
-        if not ctx.needs_input_grad[0]:
-            dx = None
-        if not ctx.needs_input_grad[1]:
-            dweight = None
+        x2d, n_rows, hidden = _flat_2d(x)
+        dy2d = dy.view(n_rows, hidden)
+        dx, dweight = _rmsnorm_backward_with_rstd(
+            dy2d,
+            x2d,
+            weight,
+            rstd,
+            n_rows,
+            hidden,
+            compute_dweight=ctx.needs_input_grad[1],
+        )
+        dx = dx.view_as(x) if ctx.needs_input_grad[0] else None
         return dx, dweight, None
 
 
@@ -448,7 +401,6 @@ class _ResidualRMSNormAutograd(torch.autograd.Function):
             BLOCK_SIZE=block_size,
         )
         ctx.save_for_backward(residual_out.view_as(x), weight, rstd)
-        ctx.eps = eps
         return out.view_as(x), residual_out.view_as(x)
 
     @staticmethod
@@ -469,18 +421,21 @@ class _ResidualRMSNormAutograd(torch.autograd.Function):
             dy = dy.contiguous()
         if not dresidual_out.is_contiguous():
             dresidual_out = dresidual_out.contiguous()
-        dz, dweight = rmsnorm_backward(dy, residual_out, weight, ctx.eps)
-        dz = dz + dresidual_out
-        if not ctx.needs_input_grad[0]:
-            dz_for_x = None
-        else:
-            dz_for_x = dz
-        if not ctx.needs_input_grad[1]:
-            dz_for_residual = None
-        else:
-            dz_for_residual = dz
-        if not ctx.needs_input_grad[2]:
-            dweight = None
+        x2d, n_rows, hidden = _flat_2d(residual_out)
+        dy2d = dy.view(n_rows, hidden)
+        dz, dweight = _rmsnorm_backward_with_rstd(
+            dy2d,
+            x2d,
+            weight,
+            rstd,
+            n_rows,
+            hidden,
+            compute_dweight=ctx.needs_input_grad[2],
+        )
+        assert dz is not None
+        dz = (dz + dresidual_out.view(n_rows, hidden)).view_as(residual_out)
+        dz_for_x = dz if ctx.needs_input_grad[0] else None
+        dz_for_residual = dz if ctx.needs_input_grad[1] else None
         return dz_for_x, dz_for_residual, dweight, None
 
 

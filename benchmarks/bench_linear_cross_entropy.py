@@ -1,3 +1,5 @@
+import warnings
+
 import torch
 import triton
 import triton.testing
@@ -10,6 +12,12 @@ from benchmarks._utils import (
     bench_ms,
     compile_fn,
     require_cuda,
+)
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Online softmax is disabled.*",
+    category=UserWarning,
 )
 
 SHAPES = [

@@ -1,5 +1,6 @@
 from importlib.metadata import PackageNotFoundError, version
 
+from . import _compat as _compat  # noqa: F401 -- applies Triton build shim
 from .ops.adamw import adamw_step
 from .ops.add import add
 from .ops.add_relu import add_relu
