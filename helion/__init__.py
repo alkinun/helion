@@ -18,7 +18,7 @@ from .nn import (
 )
 from .optim import SGD, AdamW
 from .state import Checkpoint, load_checkpoint, save_checkpoint
-from .training import CosineLR, GradientAccumulator, clip_grad_norm
+from .training import CosineLR, GradientAccumulator, LinearLR, clip_grad_norm
 
 try:
     __version__ = version("helion")
@@ -38,6 +38,7 @@ __all__ = [
     "GradientAccumulator",
     "LayerNorm",
     "Linear",
+    "LinearLR",
     "ResidualRMSNorm",
     "RMSNorm",
     "SGD",

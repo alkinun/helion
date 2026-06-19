@@ -105,3 +105,31 @@ class CosineLR:
             1, self.total_steps - self.warmup_steps
         )
         return self.base_lr * 0.5 * (1 + math.cos(math.pi * progress))
+
+
+class LinearLR:
+    """Linear LR schedule with linear warmup.
+
+    Mirrors :class:`CosineLR`: a linear warmup from 0 to ``base_lr``, followed by
+    a linear decay from ``base_lr`` down to 0 at ``total_steps``.  The decay is
+    clamped so the LR never goes negative when training past ``total_steps``.
+    """
+
+    def __init__(
+        self,
+        base_lr: float,
+        warmup_steps: int,
+        total_steps: int,
+    ) -> None:
+        self.base_lr = base_lr
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+
+    def __call__(self, step: int) -> float:
+        if step < self.warmup_steps:
+            return self.base_lr * step / max(1, self.warmup_steps)
+        progress = (step - self.warmup_steps) / max(
+            1, self.total_steps - self.warmup_steps
+        )
+        progress = min(max(progress, 0.0), 1.0)
+        return self.base_lr * (1.0 - progress)

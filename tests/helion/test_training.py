@@ -80,6 +80,46 @@ def test_cosine_lr_decays_after_warmup() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# LinearLR
+# --------------------------------------------------------------------------- #
+
+
+def test_linear_lr_warmup_is_linear() -> None:
+    sched = helion.LinearLR(base_lr=1.0, warmup_steps=10, total_steps=100)
+    assert sched(0) == pytest.approx(0.0)
+    assert sched(5) == pytest.approx(0.5)
+    assert sched(10) == pytest.approx(1.0)
+
+
+def test_linear_lr_decays_linearly_to_zero() -> None:
+    sched = helion.LinearLR(base_lr=2.0, warmup_steps=0, total_steps=100)
+    assert sched(0) == pytest.approx(2.0)
+    assert sched(50) == pytest.approx(1.0)
+    assert sched(100) == pytest.approx(0.0)
+
+
+def test_linear_lr_clamped_at_zero_past_total() -> None:
+    sched = helion.LinearLR(base_lr=1.0, warmup_steps=0, total_steps=100)
+    assert sched(150) == 0.0
+    assert sched(1000) == 0.0
+
+
+def test_linear_lr_with_warmup_transitions_smoothly() -> None:
+    sched = helion.LinearLR(base_lr=1.0, warmup_steps=10, total_steps=110)
+    assert sched(10) == pytest.approx(1.0)
+    assert sched(60) == pytest.approx(0.5)
+    assert sched(110) == pytest.approx(0.0)
+
+
+def test_linear_lr_warmup_matches_cosine_warmup() -> None:
+    # The two schedules share an identical linear warmup phase.
+    lin = helion.LinearLR(base_lr=3e-4, warmup_steps=50, total_steps=500)
+    cos = helion.CosineLR(base_lr=3e-4, warmup_steps=50, total_steps=500)
+    for step in (0, 1, 10, 25, 49):
+        assert lin(step) == pytest.approx(cos(step))
+
+
+# --------------------------------------------------------------------------- #
 # GradientAccumulator
 # --------------------------------------------------------------------------- #
 
