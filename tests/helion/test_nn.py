@@ -41,6 +41,26 @@ def test_rmsnorm_forward(dtype: torch.dtype) -> None:
 
 
 @cuda_required
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_layernorm_forward(dtype: torch.dtype) -> None:
+    norm = helion.LayerNorm(64).to(device="cuda", dtype=dtype)
+    x = torch.randn(8, 64, device="cuda", dtype=dtype)
+    ref = torch.nn.functional.layer_norm(x, (64,), norm.weight, norm.bias, eps=1e-5)
+    torch.testing.assert_close(norm(x), ref, rtol=2e-2, atol=2e-2)
+
+
+@cuda_required
+def test_layernorm_autograd() -> None:
+    norm = helion.LayerNorm(64, device="cuda", dtype=torch.float32)
+    x = torch.randn(8, 64, device="cuda", requires_grad=True)
+    norm(x).sum().backward()
+    assert x.grad is not None
+    assert x.grad.shape == x.shape
+    assert norm.weight.grad is not None
+    assert norm.bias.grad is not None
+
+
+@cuda_required
 def test_swiglu_forward() -> None:
     act = helion.SwiGLU()
     x = torch.randn(8, 32, device="cuda", dtype=torch.float32)

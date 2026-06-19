@@ -80,6 +80,26 @@ class RMSNorm(nn.Module):
         return tritium.rmsnorm(x, self.weight, self.eps)
 
 
+class LayerNorm(nn.Module):
+    weight: nn.Parameter
+    bias: nn.Parameter
+
+    def __init__(
+        self,
+        hidden_size: int,
+        eps: float = 1e-5,
+        device: torch.device | str | None = None,
+        dtype: torch.dtype | None = None,
+    ) -> None:
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(hidden_size, device=device, dtype=dtype))
+        self.bias = nn.Parameter(torch.zeros(hidden_size, device=device, dtype=dtype))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return tritium.layernorm(x, self.weight, self.bias, self.eps)
+
+
 class SwiGLU(nn.Module):
     def forward(self, gate: torch.Tensor, up: torch.Tensor) -> torch.Tensor:
         return tritium.swiglu(gate, up)

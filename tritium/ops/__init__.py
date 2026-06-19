@@ -10,6 +10,7 @@ from .cross_entropy import (
 )
 from .dropout import dropout, dropout_backward
 from .gelu import add_gelu, gelu, gelu_backward
+from .layernorm import layernorm, layernorm_backward
 from .matmul import matmul
 from .relu import relu
 from .rmsnorm import residual_rmsnorm, rmsnorm, rmsnorm_backward
@@ -29,6 +30,8 @@ __all__ = [
     "dropout_backward",
     "gelu",
     "gelu_backward",
+    "layernorm",
+    "layernorm_backward",
     "linear_cross_entropy",
     "linear_cross_entropy_backward",
     "matmul",
