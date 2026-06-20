@@ -4,7 +4,7 @@ Use this with checkpoints produced by train_shakespeare.py.
 
 Run:
     python examples/train_shakespeare.py --steps 1000 \
-        --checkpoint-out /tmp/helion_shakespeare.pt
+        --latest-checkpoint /tmp/helion_shakespeare.pt
     python examples/generate_from_checkpoint.py \
         --checkpoint /tmp/helion_shakespeare.pt --prompt "ROMEO:\n"
 """

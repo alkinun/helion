@@ -24,16 +24,32 @@ Most examples require CUDA because Tritium launches Triton kernels.
 Example train/save/test workflow:
 
 ```bash
-python examples/train_shakespeare.py --steps 1000 --checkpoint-out /tmp/helion_shakespeare.pt
-python examples/evaluate_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt
-python examples/generate_from_checkpoint.py --checkpoint /tmp/helion_shakespeare.pt \
+python examples/train_shakespeare.py --steps 1000 \
+  --latest-checkpoint /tmp/helion_shakespeare_latest.pt \
+  --best-checkpoint /tmp/helion_shakespeare_best.pt
+python examples/evaluate_checkpoint.py --checkpoint /tmp/helion_shakespeare_best.pt
+python examples/generate_from_checkpoint.py \
+  --checkpoint /tmp/helion_shakespeare_best.pt \
   --prompt "ROMEO:\n" --top-k 20 --top-p 0.9 --seed 123
 ```
+
+Resume training from the latest checkpoint:
+
+```bash
+python examples/train_shakespeare.py --resume /tmp/helion_shakespeare_latest.pt \
+  --steps 2000 \
+  --latest-checkpoint /tmp/helion_shakespeare_latest.pt \
+  --best-checkpoint /tmp/helion_shakespeare_best.pt
+```
+
+`--steps` is the target global step count when resuming, not the number of
+additional steps.
 
 `train_shakespeare.py` trains on the first `1 - --val-fraction` portion of the
 dataset and validates on the held-out tail. It logs validation loss/perplexity
 every `--eval-interval` steps and on the final step. Add
-`--best-checkpoint-out best.pt` to save the best validation checkpoint.
+`--best-checkpoint best.pt` to save the best validation checkpoint. Add
+`--latest-checkpoint latest.pt` to save the latest training state for resume.
 
 Generation supports `--temperature`, `--top-k`, `--top-p`, `--seed`, and
 `--repetition-penalty` in `train_shakespeare.py`, `inference_cached.py`, and
